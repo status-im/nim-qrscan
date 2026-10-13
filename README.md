@@ -58,7 +58,9 @@ qrscan_free(json);
 - `options_json` may be NULL or e.g. `{"formats":["QRCode"],"tryHarder":true,"roi":{"x":0,"y":0,"w":1,"h":1}}`.
 - Errors: `{"ok":false,"error":{"kind":"invalidInput"|"invalidOptions"|"engine","message":"…"}}`.
 - Every returned string is freed with `qrscan_free`.
-- Thread-safe: calls may run concurrently on different threads.
+- Thread-safe: calls may run concurrently on different threads, including
+  short-lived ones (the library is built with `-d:useMalloc`, so threads that
+  exit don't leak a Nim heap).
 - Build: `make capi` → `build/libqrscan.a`. Link it with `build/zxing/core/libZXing.a`
   and the C++ runtime (`-lc++` on Apple/Android, `-lstdc++` on Linux).
 

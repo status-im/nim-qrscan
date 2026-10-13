@@ -8,6 +8,10 @@ extern "C" {
 // does nothing without an application object.
 void qrscan_post_to_gui(void (*fn)(void));
 
+// Calls fn() once when the application is about to quit (QCoreApplication::
+// aboutToQuit), on the GUI thread. Does nothing without an application object.
+void qrscan_on_about_to_quit(void (*fn)(void));
+
 // engine: QQmlEngine*; qobject: the QObject* exposed as context property `name`.
 void qrscan_qml_install(void* engine, const char* importPath, const char* name, void* qobject);
 

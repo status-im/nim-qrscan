@@ -5,6 +5,9 @@
  *
  * Link: libqrscan.a + libZXing.a + the C++ runtime (-lc++ on Apple/Android,
  * -lstdc++ on Linux; the MSVC runtime on Windows).
+ *
+ * Build capi.nim with -d:useMalloc (the Makefile does): Nim's own allocator
+ * keeps a heap per thread, which hosts with short-lived threads would leak.
  */
 #pragma once
 

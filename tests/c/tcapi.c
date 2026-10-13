@@ -6,8 +6,33 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 
 static int contains(const char* s, const char* sub) { return s && strstr(s, sub) != NULL; }
+
+static long max_rss_kb(void)
+{
+    struct rusage ru;
+    getrusage(RUSAGE_SELF, &ru);
+#if defined(__APPLE__)
+    return ru.ru_maxrss / 1024; /* bytes on Apple platforms */
+#else
+    return ru.ru_maxrss;        /* kilobytes on Linux/Android */
+#endif
+}
+
+static uint8_t* churn_img;
+static int churn_w, churn_h;
+
+static void* one_decode(void* arg)
+{
+    (void)arg;
+    char* r = qrscan_decode_luma(churn_img, (size_t)churn_w * churn_h, churn_w, churn_h,
+                                 churn_w, NULL);
+    assert(contains(r, "\"ok\":true"));
+    qrscan_free(r);
+    return NULL;
+}
 
 static void* worker(void* arg)
 {
@@ -70,6 +95,10 @@ int main(void)
     r = qrscan_decode_luma(img, (size_t)w * h, -1, h, w, NULL);
     assert(contains(r, "\"invalidInput\"")); qrscan_free(r);
     qrscan_free(NULL);
+    /* length beyond the signed range (e.g. a negative length cast to size_t)
+       must be an error result, not an abort (final review I3) */
+    r = qrscan_decode_luma(img, (size_t)-1, w, h, w, NULL);
+    assert(contains(r, "\"invalidInput\"")); qrscan_free(r);
     free(img);
 
     /* two threads at once */
@@ -78,6 +107,21 @@ int main(void)
     pthread_create(&b, NULL, worker, "thread-b");
     pthread_join(a, NULL);
     pthread_join(b, NULL);
+
+    /* many short-lived threads (thread pools, cgo, JNI): memory must stay
+       bounded (final review I4) */
+    churn_img = qr_luma("churn", 4, 4, &churn_w, &churn_h);
+    one_decode(NULL); /* warm up */
+    long before = max_rss_kb();
+    for (int i = 0; i < 1000; ++i) {
+        pthread_t t;
+        pthread_create(&t, NULL, one_decode, NULL);
+        pthread_join(t, NULL);
+    }
+    long grown = max_rss_kb() - before;
+    printf("1000 short-lived threads: max RSS grew %ld KB\n", grown);
+    assert(grown < 16 * 1024);
+    free(churn_img);
 
     puts("tcapi: OK");
     return 0;

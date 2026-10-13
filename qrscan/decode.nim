@@ -35,11 +35,13 @@ func validate(img: LumaView): Result[void, DecodeError] =
     return err(invalid("width and height must be positive"))
   if img.rowStride < img.width:
     return err(invalid("rowStride is smaller than width"))
-  if img.len < img.rowStride * (img.height - 1) + img.width:
-    return err(invalid("buffer is shorter than rowStride * height"))
+  # zxing takes cint sizes. Checking the bounds first also keeps the product
+  # below from overflowing (both factors <= 2^31).
   if img.len > int(high(cint)) or img.rowStride > int(high(cint)) or
       img.height > int(high(cint)):
     return err(invalid("image too large"))
+  if img.len < img.rowStride * (img.height - 1) + img.width:
+    return err(invalid("buffer is shorter than rowStride * height"))
   ok()
 
 proc decode*(img: LumaView, opts = DecodeOptions.init()): Result[seq[DecodedCode], DecodeError] =

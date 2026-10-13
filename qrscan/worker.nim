@@ -81,6 +81,10 @@ proc newDecodeWorker*(onReady: ResultReady = nil): DecodeWorker =
     createThread(w.thread, workerLoop, s)
   w
 
+proc isRunning*(w: DecodeWorker): bool =
+  ## False once stopped.
+  w.running
+
 proc busy*(w: DecodeWorker): bool =
   w.running and w.state.busy.load()
 

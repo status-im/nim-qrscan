@@ -38,10 +38,12 @@ type
     source: int
     scanning: bool
     inFlight: bool
+    wantsFrame: bool ## a requested frame was dropped while another scanner decoded
     dropped: int
     opts: DecodeOptions
 
 proc drainOnGui() {.cdecl, gcsafe, raises: [].}
+proc quitOnGui() {.cdecl, gcsafe, raises: [].}
 
 proc onWorkerReady() {.gcsafe, raises: [], nimcall.} =
   ## Worker thread: wake the GUI thread to collect the result.
@@ -54,27 +56,45 @@ QtObject:
     worker: DecodeWorker
     frames: FrameSource
     hasFrames: bool
+    shutDown: bool
 
   proc setup(self: QrScanBackend)
   proc delete(self: QrScanBackend)
+  proc shutdown(self: QrScanBackend)
 
   proc newQrScanBackend*(): QrScanBackend =
     new(result, delete)
     result.setup
     result.nextHandle = 1
     result.worker = newDecodeWorker(onWorkerReady)
+    # Stop and join the worker before the application object goes away.
+    shimOnAboutToQuit(quitOnGui)
 
   proc setup(self: QrScanBackend) =
     self.QObject.setup
 
   proc delete(self: QrScanBackend) =
+    self.shutdown()
+    self.QObject.delete
+
+  proc shutdown(self: QrScanBackend) =
+    ## Detaches every source and stops/joins the worker (finishing a decode in
+    ## flight). Afterwards frames are ignored. Idempotent.
+    if self.shutDown:
+      return
+    self.shutDown = true
     if self.hasFrames:
       for e in self.scanners.values:
         if e.source != 0:
           self.frames.detach(e.source)
     self.scanners.clear()
     self.worker.stop()
-    self.QObject.delete
+
+  proc isShutDown*(self: QrScanBackend): bool =
+    self.shutDown
+
+  proc workerRunning*(self: QrScanBackend): bool =
+    self.worker.isRunning
 
   proc scanResult*(self: QrScanBackend, handle: int, text: string, decodeMs: float) {.signal.}
 
@@ -82,7 +102,7 @@ QtObject:
     self.scanners.getOrDefault(handle, nil)
 
   proc requestNext(self: QrScanBackend, e: ScannerEntry) =
-    if self.hasFrames and e.scanning and not e.inFlight and e.source != 0:
+    if not self.shutDown and self.hasFrames and e.scanning and not e.inFlight and e.source != 0:
       self.frames.requestNext(e.source)
 
   proc createScanner(self: QrScanBackend): int {.slot.} =
@@ -139,10 +159,16 @@ QtObject:
   proc deliver(self: QrScanBackend, handle: int, data: openArray[byte],
                width, height, rowStride: int) =
     let e = self.entry(handle)
-    if e == nil or not e.scanning:
+    if self.shutDown or e == nil or not e.scanning:
       return
-    if e.inFlight or self.worker.busy:
+    if e.inFlight:
+      inc e.dropped # its own result will request the next frame
+      return
+    if self.worker.busy:
+      # Another scanner's decode holds the shared worker. The request this
+      # frame answered is used up, so ask again once the worker is free.
       inc e.dropped
+      e.wantsFrame = true
       return
     var job = DecodeJob(id: handle, width: width, height: height, rowStride: rowStride,
                         opts: e.opts, data: newSeq[byte](data.len))
@@ -152,6 +178,7 @@ QtObject:
       e.inFlight = true
     else:
       inc e.dropped
+      e.wantsFrame = true
 
   proc drain(self: QrScanBackend) =
     while true:
@@ -166,6 +193,12 @@ QtObject:
       for code in outcome.codes:
         self.scanResult(outcome.id, code.text, outcome.decodeMs)
       self.requestNext(e)
+    # The worker is free again: re-request for scanners whose frame was dropped.
+    if not self.worker.busy:
+      for e in self.scanners.values:
+        if e.wantsFrame and not e.inFlight:
+          e.wantsFrame = false
+          self.requestNext(e)
 
 var backend {.threadvar.}: QrScanBackend
 
@@ -179,6 +212,15 @@ proc drainOnGui() {.cdecl, gcsafe, raises: [].} =
   {.cast(gcsafe), cast(raises: []).}:
     if backend != nil:
       backend.drain()
+
+proc shutdownQrScan*() {.gcsafe, raises: [].} =
+  ## Stops the backend's worker (also done automatically on aboutToQuit).
+  {.cast(gcsafe), cast(raises: []).}:
+    if backend != nil:
+      backend.shutdown()
+
+proc quitOnGui() {.cdecl, gcsafe, raises: [].} =
+  shutdownQrScan()
 
 proc deliverFrame*(scanner: int, data: openArray[byte], width, height, rowStride: int) {.
     gcsafe, raises: [].} =

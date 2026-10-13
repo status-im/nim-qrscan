@@ -11,6 +11,7 @@ QtObject:
   type Reporter = ref object of QObject
     found: seq[string]
     scannerHandle: int
+    otherHandle: int
 
   proc setup(self: Reporter)
   proc delete(self: Reporter)
@@ -27,6 +28,9 @@ QtObject:
 
   proc ready(self: Reporter, handle: int) {.slot.} =
     self.scannerHandle = handle
+
+  proc readyOther(self: Reporter, handle: int) {.slot.} =
+    self.otherHandle = handle
 
   proc foundTag(self: Reporter, tag: string) {.slot.} =
     self.found.add tag
@@ -57,6 +61,16 @@ proc pump(source: int) =
     queue[source].delete(0)
     deliverFrame(attached[source], g.data, g.width, g.height, g.rowStride)
 
+proc slowFrameWithCode(text: string): GrayImage =
+  ## Large and noisy: decoding takes long enough to still be running when the
+  ## test acts on another scanner, yet still finds `text`.
+  result = GrayImage(width: 2600, height: 2600, rowStride: 2600,
+                     data: newSeq[byte](2600 * 2600)).withNoise(127, 5)
+  let qr = qrImage(text, scale = 6)
+  for y in 0 ..< qr.height:
+    for x in 0 ..< qr.width:
+      result.data[(1200 + y) * 2600 + 1200 + x] = qr.data[y * qr.rowStride + x]
+
 proc waitFor(cond: proc(): bool, timeoutMs = 3000): bool =
   let deadline = getMonoTime() + initDuration(milliseconds = timeoutMs)
   while getMonoTime() < deadline:
@@ -86,6 +100,11 @@ Item {
         Component.onCompleted: reporter.ready(handle)
       }
     }
+  }
+  QrScanner {
+    // a second scanner sharing the backend's one decode worker
+    frameSource: 8
+    Component.onCompleted: reporter.readyOther(handle)
   }
   Connections { target: reporter; function onSetScanning(on) { loader.item.scanning = on } }
   Connections { target: reporter; function onDestroyScanner() { loader.active = false } }
@@ -137,18 +156,36 @@ suite "qml QrScanner":
     pump(source)
     check waitFor(proc(): bool = reporter.found.len == before + 1)
 
+  test "a frame dropped while another scanner decodes is requested again": # final review I1
+    let a = reporter.otherHandle  # source 8
+    let b = reporter.scannerHandle # source 7
+    check a > 0
+    let slow = slowFrameWithCode("from-a")
+    deliverFrame(a, slow.data, slow.width, slow.height, slow.rowStride) # worker busy with A
+    requests[source] = 0
+    let g = qrImage("from-b")
+    deliverFrame(b, g.data, g.width, g.height, g.rowStride) # dropped: worker busy
+    check waitFor(proc(): bool = "from-a" in reporter.found or requests.getOrDefault(source) > 0, 20_000)
+    # once A's decode is done, B must be asked for a new frame (no stall)
+    check waitFor(proc(): bool = requests.getOrDefault(source) == 1, 20_000)
+    queue[source] = @[g]
+    pump(source)
+    check waitFor(proc(): bool = "from-b" in reporter.found, 20_000)
+
   test "scanner destroyed mid-decode": # Review Focus 2
     let h = reporter.scannerHandle
     let before = reporter.found.len
-    let g = qrImage("late")
-    deliverFrame(h, g.data, g.width, g.height, g.rowStride)
-    reporter.destroyScanner()
-    for i in 0 ..< 200:
+    let slow = slowFrameWithCode("late")
+    deliverFrame(h, slow.data, slow.width, slow.height, slow.rowStride)
+    reporter.destroyScanner() # while the slow decode is still running
+    for i in 0 ..< 400:
       processEvents()
       sleep(5)
-    check reporter.found.len == before # no signal for a destroyed scanner
+    check "late" notin reporter.found # no signal for a destroyed scanner
+    check reporter.found.len == before
     check source notin attached # detached on destroy
-    check qrScanBackend().scannerCount() == 0
+    check qrScanBackend().scannerCount() == 1 # only the second scanner remains
+    let g = qrImage("late")
     deliverFrame(h, g.data, g.width, g.height, g.rowStride) # late frame: ignored
     for i in 0 ..< 20:
       processEvents()
@@ -159,5 +196,5 @@ suite "qml QrScanner":
     let e2 = newQQmlApplicationEngine()
     installOnEngine(cast[pointer](e2.vptr), testFrames)
     check qrScanBackend() == b
-    check b.scannerCount() == 0
+    check b.scannerCount() == 1
     e2.delete()

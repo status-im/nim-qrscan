@@ -13,6 +13,14 @@ extern "C" void qrscan_post_to_gui(void (*fn)(void))
     QMetaObject::invokeMethod(app, [fn] { fn(); }, Qt::QueuedConnection);
 }
 
+extern "C" void qrscan_on_about_to_quit(void (*fn)(void))
+{
+    auto* app = QCoreApplication::instance();
+    if (!app || !fn)
+        return;
+    QObject::connect(app, &QCoreApplication::aboutToQuit, app, [fn] { fn(); });
+}
+
 extern "C" void qrscan_qml_install(void* engine, const char* importPath, const char* name, void* qobject)
 {
     auto* e = static_cast<QQmlEngine*>(engine);

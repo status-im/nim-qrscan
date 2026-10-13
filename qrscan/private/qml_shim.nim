@@ -12,5 +12,6 @@ import seaqt/QtQml/qtqml_pkg
 type GuiCallback* = proc() {.cdecl, gcsafe, raises: [].}
 
 proc shimPostToGui*(fn: GuiCallback) {.importc: "qrscan_post_to_gui".}
+proc shimOnAboutToQuit*(fn: GuiCallback) {.importc: "qrscan_on_about_to_quit".}
 proc shimQmlInstall*(engine: pointer, importPath, name: cstring, qobject: pointer) {.
   importc: "qrscan_qml_install".}

@@ -17,7 +17,7 @@ QRGEN=.deps/QR-Code-generator/c
 
 source scripts/toolchain.sh "$PLATFORM" $ABI   # sets CC, CXX, NIM_TARGET_FLAGS, LINK_FLAGS, RUN
 
-"$NIM" c --app:staticlib --noMain -d:release --hints:off ${NIM_TARGET_FLAGS[@]+"${NIM_TARGET_FLAGS[@]}"} \
+"$NIM" c --app:staticlib --noMain -d:release -d:useMalloc --hints:off ${NIM_TARGET_FLAGS[@]+"${NIM_TARGET_FLAGS[@]}"} \
   -d:qrscanZxingLib="$ZXING_LIB" --nimcache:"$OUT/nimcache-capi" \
   --out:"$PWD/$OUT/libqrscan.a" qrscan/capi.nim
 

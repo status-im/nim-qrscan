@@ -109,7 +109,10 @@ proc decodeToJson(data: ptr uint8, len: csize_t, width, height, rowStride: cint,
   let opts = parseOptions(optionsJson)
   if opts.isErr:
     return errorJson("invalidOptions", opts.error)
-  let view = LumaView(data: cast[ptr UncheckedArray[byte]](data), len: len.int,
+  # Clamp before converting: a length beyond int's range (e.g. a negative
+  # length cast to size_t) must become a validation error, not a RangeDefect.
+  let length = if len > csize_t(high(int)): high(int) else: int(len)
+  let view = LumaView(data: cast[ptr UncheckedArray[byte]](data), len: length,
                       width: width.int, height: height.int, rowStride: rowStride.int)
   let r = decode(view, opts.get)
   if r.isErr:

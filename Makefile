@@ -82,13 +82,15 @@ independence:
 test: independence | qt-pkgconfig $(ZXING_LIB)
 	@for t in $(TESTS); do echo "== $$t"; $(NIM) c -r $(NIMFLAGS) -d:qrscanTesting $$t || exit 1; done
 
-# C ABI: static library + header (include/qrscan.h). C hosts link
+# C ABI: static library + header (include/qrscan.h). Built with -d:useMalloc:
+# Nim's own allocator keeps a heap per thread, which C hosts with short-lived
+# threads (pools, cgo, JNI) would leak; malloc returns it. C hosts link
 # build/libqrscan.a + libZXing.a + the C++ runtime.
 CAPI_LIB ?= build/libqrscan.a
 TCAPI_BIN ?= tests/c/tcapi
 
 capi: $(ZXING_LIB)
-	$(NIM) c --app:staticlib --noMain -d:release --hints:off \
+	$(NIM) c --app:staticlib --noMain -d:release -d:useMalloc --hints:off \
 	  -d:qrscanZxingLib=$(CURDIR)/$(ZXING_LIB) \
 	  --nimcache:$(dir $(CAPI_LIB))nimcache-capi --out:$(CURDIR)/$(CAPI_LIB) qrscan/capi.nim
 

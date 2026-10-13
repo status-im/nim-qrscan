@@ -85,3 +85,12 @@ suite "decode":
     check decode(lumaView(buf, 4, 5, 4)).error.kind == dekInvalidInput # too short
     check decode(lumaView(buf, -1, 4, 4)).error.kind == dekInvalidInput # negative
     discard decode(lumaView(buf, 4, 4, 4)) # tiny but valid: must not crash
+
+  test "huge dimensions are rejected, not overflowed": # final review I2
+    var buf = newSeq[byte](16)
+    let v = LumaView(data: cast[ptr UncheckedArray[byte]](addr buf[0]), len: buf.len,
+                     width: 1, height: 3, rowStride: high(int))
+    check decode(v).error.kind == dekInvalidInput
+    let w = LumaView(data: cast[ptr UncheckedArray[byte]](addr buf[0]), len: buf.len,
+                     width: high(int), height: high(int), rowStride: high(int))
+    check decode(w).error.kind == dekInvalidInput
