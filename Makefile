@@ -88,4 +88,18 @@ ctest: capi
 	  $(CAPI_LIB) $(ZXING_LIB) $(CXXRUNTIME) -lpthread -lm -o tests/c/tcapi
 	tests/c/tcapi
 
-.PHONY: all deps example-deps zxing independence test capi ctest
+bench: $(ZXING_LIB)
+	$(NIM) c -r -d:release $(NIMFLAGS) tests/bench/bdecode.nim
+
+# Camera demo; needs `make example-deps` (clones nim-qtcamera). On macOS the
+# binary embeds an Info.plist so camera access can be granted.
+ifeq ($(shell uname -s),Darwin)
+ EXAMPLE_FLAGS := -d:qtPluginsDir=$(shell $(QMAKE) -query QT_INSTALL_PLUGINS 2>/dev/null) \
+   --passL:"-Wl,-sectcreate,__TEXT,__info_plist,$(CURDIR)/resources/Info.plist"
+endif
+
+example: | qt-pkgconfig $(ZXING_LIB)
+	@test -d $(DEPS)/nim-qtcamera || (echo "run: make example-deps [QTCAMERA_URL=<repo>]" && false)
+	$(NIM) c -r $(NIMFLAGS) $(EXAMPLE_FLAGS) examples/scan/main.nim
+
+.PHONY: all deps example-deps zxing independence test capi ctest bench example

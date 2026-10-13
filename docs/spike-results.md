@@ -24,3 +24,16 @@ Verdict: **go**.
 3. `git submodule add` records the default branch tip; checking out the tag
    afterwards must be staged (`git add vendor/zxing-cpp`) or `git submodule
    update` resets it. The pin is now `v3.1.1`.
+
+## Decode benchmark (`make bench`, macOS arm64, -d:release, 2026-10-13)
+
+QR code (42-char address, 8 px/module) centered in a noisy mid-gray frame,
+default options (QR only; try harder/rotate/invert/downscale), 50 runs:
+
+| Input | Median | p95 |
+|---|---|---|
+| 1920x1080 | 13.4 ms | 14.0 ms |
+| downscaled to 640x360 | 1.4 ms | 1.5 ms |
+
+A FrameTap `maxDim` of ~1024 keeps per-frame decode well under the frame
+interval at 10 fps.

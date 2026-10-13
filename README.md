@@ -4,7 +4,7 @@ QR / barcode decoding for Nim, over [zxing-cpp](https://github.com/zxing-cpp/zxi
 (v3.1.1, C API). The library doesn't know where an image came from (a camera,
 a file, a Logos module, a test): it decodes 8-bit grayscale buffers.
 
-Work in progress — see `docs/spike-results.md`.
+Platforms: iOS, Android, Linux, Windows and macOS (see `docs/platforms.md`).
 
 ## Layers
 
@@ -62,6 +62,30 @@ qrscan_free(json);
 - Build: `make capi` → `build/libqrscan.a`. Link it with `build/zxing/core/libZXing.a`
   and the C++ runtime (`-lc++` on Apple/Android, `-lstdc++` on Linux).
 
+## Example: camera → scanner
+
+`examples/scan` wires nim-qtcamera's FrameTap into a `QrScanner` with ~10
+lines of glue (`cameraFrames()` in `main.nim`). It is the only place in this
+repo that uses nim-qtcamera:
+
+```sh
+make example-deps QTCAMERA_URL=<nim-qtcamera repo>   # clones it into .deps/
+make example
+```
+
+## Performance
+
+`make bench` (macOS arm64): a 1080p frame decodes in ~13 ms, a 640 px frame
+in ~1.4 ms (`docs/spike-results.md`).
+
+## zxing-cpp
+
+Pinned at v3.1.1 (`vendor/zxing-cpp`), built static with readers and the C API
+only (`make zxing`). Hosts that build zxing themselves pass
+`-d:qrscanZxingLib=<path to libZXing.a>`.
+
+Not included yet: decoding image files (PNG/JPEG).
+
 ## Development
 
 ```sh
@@ -69,4 +93,5 @@ make deps     # zxing-cpp submodule + pinned Nim deps into .deps/
 make zxing    # static libZXing.a (readers + C API)
 make test     # Nim test suites
 make ctest    # C interface test (incl. two threads)
+make bench    # 1080p decode benchmark
 ```
