@@ -119,11 +119,34 @@ suite "DecodeWorker":
     check w.tryTakeResult().isNone
     w.stop()
 
+  test "results outlive the worker thread": # Windows CI: SIGSEGV in stop()
+    # Under ORC a thread's heap header dies with the thread, so memory the
+    # worker allocated must not be freed by another thread after it exits:
+    # not the results channel's buffer (allocated by the worker's first send),
+    # not a result still queued at stop, not a result the caller holds.
+    # Windows faults on such a free; elsewhere `make test-asan` reports it.
+    var held: DecodeOutcome
+    block:
+      let w = newDecodeWorker()
+      check w.submit(job("held", id = 5))
+      held = w.waitResult().get
+      check w.submit(job("queued", id = 6))
+      while w.busy:
+        sleep(2)
+      w.stop() # result 6 is never taken
+    check held.id == 5
+    check held.codes[0].text == "held"
+    held = DecodeOutcome() # frees the taken result after the worker exited
+    check held.codes.len == 0
+
   test "dropping a worker stops and joins its thread": # review: Task 3 cleanup
-    let base = liveThreadCount()
-    dropIdleWorkers(24)
-    check liveThreadCount() <= base
-    dropBusyWorker()
-    check liveThreadCount() <= base
-    stopThenDrop()
-    check liveThreadCount() <= base
+    when defined(windows):
+      skip() # counts threads with ps (macOS) / /proc (Linux)
+    else:
+      let base = liveThreadCount()
+      dropIdleWorkers(24)
+      check liveThreadCount() <= base
+      dropBusyWorker()
+      check liveThreadCount() <= base
+      stopThenDrop()
+      check liveThreadCount() <= base

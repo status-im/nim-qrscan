@@ -39,7 +39,10 @@ case "$PLATFORM" in
     require_ndk
     BIN=$NDK/toolchains/llvm/prebuilt/$NDK_HOST/bin
     CC=$BIN/$TRIPLE-clang; CXX=$BIN/$TRIPLE-clang++
-    ln -sf "$BIN/llvm-ar" "$WRAP/ar"; export PATH="$WRAP:$PATH" # ELF archives
+    # ELF archives: Nim's clang backend runs `llvm-ar` on Linux hosts and `ar`
+    # on macOS (whose ar can't write ELF archives), so expose both.
+    ln -sf "$BIN/llvm-ar" "$WRAP/ar"; ln -sf "$BIN/llvm-ar" "$WRAP/llvm-ar"
+    export PATH="$WRAP:$PATH"
     NIM_TARGET_FLAGS=(--os:android --cpu:$CPU -d:androidNDK --cc:clang
                       --clang.exe="$CC" --clang.linkerexe="$CC")
     LINK_FLAGS=(-static-libstdc++)

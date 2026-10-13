@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NIM_VERSION: "2.2.10"
+  QT_VERSION: "6.11.0"
+
+jobs:
+  desktop:
+    name: test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-24.04
+          - name: macos
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgl1-mesa-dev libegl1 libxkbcommon0 libfontconfig1
+
+      - name: Install Qt (QML layer tests)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+
+      - name: Install Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: ${{ env.NIM_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch pinned dependencies
+        run: make deps
+
+      - name: Nim tests (core, worker, QML; headless)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: make test
+
+      - name: C interface test
+        run: make ctest
+
+      # Catches worker-thread memory freed by another thread after the worker
+      # exited, which only crashes outright on Windows. macOS frees a dead
+      # thread's TLS through malloc, so ASan sees it reliably there.
+      - name: Worker under AddressSanitizer
+        if: runner.os == 'macOS'
+        run: make test-asan
+
+      - name: iOS simulator (C interface, runs in the simulator)
+        if: runner.os == 'macOS'
+        run: |
+          udid=$(xcrun simctl list devices available -j | python3 -c \
+            'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for r in d.values() for x in r if x["name"].startswith("iPhone")))')
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          scripts/cross-check.sh ios-sim
+
+      - name: iOS device (build and link)
+        if: runner.os == 'macOS'
+        run: scripts/cross-check.sh ios
+
+  android:
+    name: build (android)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: ${{ env.NIM_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch pinned dependencies
+        run: make deps QMAKE=/nonexistent/qmake
+
+      - name: arm64-v8a (build and link)
+        run: |
+          export ANDROID_NDK_ROOT=${ANDROID_NDK_ROOT:-$ANDROID_NDK_LATEST_HOME}
+          scripts/cross-check.sh android arm64-v8a
+
+      - name: x86_64 (build and link)
+        run: |
+          export ANDROID_NDK_ROOT=${ANDROID_NDK_ROOT:-$ANDROID_NDK_LATEST_HOME}
+          scripts/cross-check.sh android x86_64
+
+  windows:
+    name: test (windows)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: ${{ env.NIM_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch pinned dependencies (nim-results, QR generator)
+        run: scripts/fetch-core-deps.sh
+
+      - name: Core + worker tests (clang targeting MSVC)
+        run: scripts/windows-test-core.sh

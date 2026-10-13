@@ -9,6 +9,12 @@
 ##   the Qt GUI thread.
 ## - `stop` finishes the job in flight and joins the thread; dropping the last
 ##   reference does the same automatically.
+## - Thread ownership of memory: under ORC a thread's heap header dies with the
+##   thread, so another thread must not free the worker's allocations after it
+##   has exited (Windows faults; elsewhere it is a silent use-after-free). The
+##   worker therefore frees what stays on its side (untaken results, the results
+##   channel's buffer) before exiting, and `tryTakeResult` hands the caller a
+##   copy in the caller's own heap.
 
 {.push raises: [], gcsafe.}
 
@@ -55,8 +61,7 @@ proc shutdownWorker(s: ptr WorkerState, t: Thread[ptr WorkerState]) =
   {.cast(raises: []).}:
     s.jobs.send(Msg(quit: true))
     joinThread(t)
-  s.jobs.close()
-  s.results.close()
+  s.jobs.close() # the results channel is closed by the worker (workerLoop)
   deallocShared(s)
 
 proc `=destroy`(w: DecodeWorkerObj) =
@@ -86,6 +91,15 @@ proc workerLoop(s: ptr WorkerState) {.thread, raises: [].} =
     s.busy.store(false)
     if s.onReady != nil:
       s.onReady()
+  # The worker's first send allocated the results buffer, and untaken results
+  # are worker-heap memory: free both while this thread is still alive.
+  while true:
+    var taken: bool
+    {.cast(raises: []).}:
+      taken = s.results.tryRecv().dataAvailable
+    if not taken:
+      break
+  s.results.close()
 
 proc newDecodeWorker*(onReady: ResultReady = nil): DecodeWorker =
   let s = cast[ptr WorkerState](allocShared0(sizeof(WorkerState)))
@@ -115,12 +129,22 @@ proc submit*(w: DecodeWorker, job: sink DecodeJob): bool =
     w.state.jobs.send(Msg(job: job))
   true
 
+func copyOf(o: DecodeOutcome): DecodeOutcome =
+  ## A deep copy in the calling thread's heap. `o` is borrowed, so the compiler
+  ## must copy here; an explicit `=copy` on a last use gets turned into a move.
+  o
+
 proc tryTakeResult*(w: DecodeWorker): Opt[DecodeOutcome] =
-  ## Non-blocking; any thread.
+  ## Non-blocking. Call it from the thread that stops the worker. The outcome
+  ## is copied into the caller's heap and the worker-allocated original freed
+  ## here, while the worker thread is still alive, so the result stays valid
+  ## after `stop` (see the module notes).
   if w.state == nil:
     return Opt.none(DecodeOutcome)
-  let (ok, outcome) = w.state.results.tryRecv()
-  if ok: Opt.some(outcome) else: Opt.none(DecodeOutcome)
+  let (ok, received) = w.state.results.tryRecv()
+  if not ok:
+    return Opt.none(DecodeOutcome)
+  Opt.some(copyOf(received))
 
 proc stop*(w: DecodeWorker) =
   ## Finishes the job in flight, joins the thread and frees the channels.

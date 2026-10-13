@@ -18,13 +18,17 @@ and runs the test wherever a simulator/emulator is available.
 | Android x86_64 | `scripts/cross-check.sh android x86_64` | builds and links (ELF x86-64); not run (the emulator image is arm64) |
 | Linux arm64 | Docker `nimlang/nim:2.2.10`: `make test-core && make ctest` | 20/20 core+worker tests, `tcapi: OK` |
 | Linux x86_64 | same, `--platform linux/amd64` (emulated) | 20/20, `tcapi: OK` |
-| Windows x86_64 | **pending**: no Windows toolchain on this host | build commands below; run on Windows CI or a Windows machine (Phase 5) |
+| Windows x86_64 | CI `test (windows)`: `scripts/windows-test-core.sh` | core + worker suites pass; C test not run on Windows yet |
 
 The C test covers decoding, options, invalid arguments, UTF-8 and two threads
 decoding at once. The QML layer (`tests/tqml.nim`) needs Qt and runs on macOS;
 on mobile it is built as part of the app (Phase 4/5).
 
-### Windows (pending)
+### Windows
+
+CI runs the core and worker suites on Windows (`scripts/windows-test-core.sh`):
+zxing built with MSVC (`-A x64`, /MD), Nim suites compiled with clang targeting
+`x86_64-pc-windows-msvc` and linked with lld, as desktop-app does.
 
 Same flags desktop-app uses for the app (clang targeting MSVC):
 

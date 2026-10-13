@@ -24,16 +24,16 @@ case "$PLATFORM" in
            TARGET=(-DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"
                    -DANDROID_ABI="${ABI:?android needs an ABI (arm64-v8a, x86_64, ...)}"
                    -DANDROID_PLATFORM=android-28 -DANDROID_STL=c++_static) ;;
-  windows) # clang targeting MSVC, as desktop-app's Makefile builds the app
-           TARGET=(-G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-                   -DCMAKE_C_COMPILER_TARGET=x86_64-pc-windows-msvc
-                   -DCMAKE_CXX_COMPILER_TARGET=x86_64-pc-windows-msvc
-                   -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL) ;;
+  windows) # MSVC (Visual Studio generator, /MD), as desktop-app builds its
+           # CMake dependencies on Windows (-A x64); Nim then links it with clang
+           # targeting x86_64-pc-windows-msvc.
+           TARGET=(-A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL) ;;
   *) echo "unknown platform: $PLATFORM" >&2; exit 2 ;;
 esac
 
-if [[ ! -f "$BUILD/core/libZXing.a" && ! -f "$BUILD/core/ZXing.lib" ]]; then
+find_lib() { find "$BUILD/core" -maxdepth 2 \( -name libZXing.a -o -name ZXing.lib \) 2>/dev/null | head -1; }
+if [[ -z "$(find_lib)" ]]; then
   cmake -S vendor/zxing-cpp -B "$BUILD" "${COMMON[@]}" ${TARGET[@]+"${TARGET[@]}"} >/dev/null
-  cmake --build "$BUILD" -j >/dev/null
+  cmake --build "$BUILD" --config Release -j >/dev/null
 fi
-ls "$BUILD"/core/*ZXing* | head -1
+find_lib

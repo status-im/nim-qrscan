@@ -10,8 +10,7 @@ TAG=$PLATFORM${ABI:+-$ABI}
 OUT=build/$TAG
 mkdir -p "$OUT"
 
-scripts/build-zxing.sh "$PLATFORM" $ABI
-ZXING_LIB=$PWD/build/zxing-$TAG/core/libZXing.a
+ZXING_LIB=$PWD/$(scripts/build-zxing.sh "$PLATFORM" $ABI | tail -1)
 NIM=${NIM:-nim}
 QRGEN=.deps/QR-Code-generator/c
 

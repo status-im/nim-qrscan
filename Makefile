@@ -120,6 +120,15 @@ example: | qt-pkgconfig $(ZXING_LIB)
 test-core: independence $(ZXING_LIB)
 	@for t in $(CORE_TESTS); do echo "== $$t"; $(NIM) c -r $(NIMFLAGS) -d:qrscanTesting $$t || exit 1; done
 
+# Worker suite under AddressSanitizer: catches memory crossing threads the
+# wrong way (e.g. freeing worker-heap memory after the worker exited), which
+# only Windows turns into a crash. Reliable on macOS, where a dead thread's
+# Nim heap header is freed through malloc.
+ASAN_FLAGS := --debugger:native --passC:-fsanitize=address --passL:-fsanitize=address
+test-asan: $(ZXING_LIB)
+	$(NIM) c -r $(NIMFLAGS) $(ASAN_FLAGS) -d:qrscanTesting \
+	  --nimcache:build/nimcache-asan -o:build/tworker-asan tests/tworker.nim
+
 # Per-platform build + C test (runs where this host can): see docs/platforms.md
 cross-check:
 	scripts/cross-check.sh macos
@@ -128,5 +137,5 @@ cross-check:
 	scripts/cross-check.sh android arm64-v8a
 	scripts/cross-check.sh android x86_64
 
-.PHONY: test-core cross-check
+.PHONY: test-core test-asan cross-check
 .PHONY: all deps example-deps zxing independence test capi ctest bench example

@@ -88,6 +88,20 @@ only (`make zxing`). Hosts that build zxing themselves pass
 
 Not included yet: decoding image files (PNG/JPEG).
 
+## CI
+
+`.github/workflows/ci.yml`, on every pull request and on pushes to `main`:
+
+| Job | What |
+|---|---|
+| test (linux), test (macos) | `make test` (core, worker, QML headless) + `make ctest` |
+| test (macos) | also the C test **in the iOS simulator**, and an iOS device build |
+| build (android) | arm64-v8a and x86_64 build and link |
+| test (windows) | core + worker suites built like desktop-app builds Nim on Windows (clang → x86_64-pc-windows-msvc, lld, /MD) |
+
+Not in CI yet: running on an Android emulator, and the C test on Windows
+(it uses pthreads).
+
 ## Development
 
 ```sh
