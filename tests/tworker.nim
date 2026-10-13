@@ -1,4 +1,4 @@
-import std/[unittest, os, monotimes, times]
+import std/[unittest, os, monotimes, times, osproc, strutils]
 import results
 import ../qrscan, ../qrscan/worker
 import ./qrgen
@@ -16,6 +16,36 @@ proc waitResult(w: DecodeWorker, timeoutMs = 5000): Opt[DecodeOutcome] =
       return r
     sleep(2)
   Opt.none(DecodeOutcome)
+
+proc liveThreadCount(): int =
+  ## Threads of this process (macOS: ps -M; Linux: /proc/self/task).
+  when defined(linux):
+    for _ in walkDir("/proc/self/task"):
+      inc result
+  else:
+    let listing = execProcess("ps", args = ["-M", $getCurrentProcessId()],
+                          options = {poUsePath})
+    result = listing.strip.splitLines.len - 1 # minus the header line
+
+proc dropIdleWorkers(n: int) =
+  for i in 0 ..< n:
+    let w = newDecodeWorker()
+    check w.isRunning # dropped at the end of each iteration, never stopped
+
+proc dropBusyWorker() =
+  let w = newDecodeWorker()
+  let noise = GrayImage(width: 1500, height: 1500, rowStride: 1500,
+                        data: newSeq[byte](1500 * 1500)).withNoise(127, 13)
+  check w.submit(DecodeJob(id: 9, data: noise.data, width: noise.width,
+                           height: noise.height, rowStride: noise.rowStride,
+                           opts: DecodeOptions.init()))
+  # dropped with a decode in flight
+
+proc stopThenDrop() =
+  let w = newDecodeWorker()
+  w.stop()
+  w.stop()
+  # destroyed after an explicit stop: must not stop/free twice
 
 var readyCount: int # touched from the worker thread through onReady
 
@@ -88,3 +118,12 @@ suite "DecodeWorker":
       check w.waitResult().get.id == i
     check w.tryTakeResult().isNone
     w.stop()
+
+  test "dropping a worker stops and joins its thread": # review: Task 3 cleanup
+    let base = liveThreadCount()
+    dropIdleWorkers(24)
+    check liveThreadCount() <= base
+    dropBusyWorker()
+    check liveThreadCount() <= base
+    stopThenDrop()
+    check liveThreadCount() <= base

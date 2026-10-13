@@ -40,6 +40,8 @@ QtObject:
 
 # --- synthetic frame source (the host's job in real apps) -----------------
 var
+  syncSource = 0                # a source that answers requestNext synchronously
+  syncFrame: GrayImage
   attached: Table[int, int]     # source -> scanner
   requests: Table[int, int]     # source -> pending frame requests
   queue: Table[int, seq[GrayImage]]
@@ -48,7 +50,11 @@ let testFrames = FrameSource(
   attach: proc(source, scanner: int) {.gcsafe, raises: [].} =
     {.cast(gcsafe).}: attached[source] = scanner,
   requestNext: proc(source: int) {.gcsafe, raises: [].} =
-    {.cast(gcsafe).}: requests.mgetOrPut(source, 0).inc,
+    {.cast(gcsafe), cast(raises: []).}:
+      requests.mgetOrPut(source, 0).inc
+      if source == syncSource and source in attached: # frame already available
+        deliverFrame(attached[source], syncFrame.data, syncFrame.width,
+                     syncFrame.height, syncFrame.rowStride),
   detach: proc(source: int) {.gcsafe, raises: [].} =
     {.cast(gcsafe).}: attached.del(source))
 
@@ -171,6 +177,21 @@ suite "qml QrScanner":
     queue[source] = @[g]
     pump(source)
     check waitFor(proc(): bool = "from-b" in reporter.found, 20_000)
+
+  test "a synchronously fed scanner doesn't starve a waiting one": # review: fairness
+    let a = reporter.otherHandle  # source 8: answers every request at once
+    let b = reporter.scannerHandle # source 7
+    syncFrame = qrImage("sync", scale = 20)
+    syncSource = 8
+    requests[source] = 0
+    deliverFrame(a, syncFrame.data, syncFrame.width, syncFrame.height, syncFrame.rowStride)
+    let g = qrImage("waiting")
+    deliverFrame(b, g.data, g.width, g.height, g.rowStride) # dropped: worker busy with A
+    check waitFor(proc(): bool = requests.getOrDefault(source) >= 1, 3000)
+    syncSource = 0
+    for i in 0 ..< 50:
+      processEvents()
+      sleep(2)
 
   test "scanner destroyed mid-decode": # Review Focus 2
     let h = reporter.scannerHandle

@@ -7,7 +7,8 @@
 ## - Results are collected with `tryTakeResult`. `onReady` (optional, nimcall,
 ##   called on the worker thread) lets a host wake its own thread, e.g. post to
 ##   the Qt GUI thread.
-## - Call `stop` before dropping the worker.
+## - `stop` finishes the job in flight and joins the thread; dropping the last
+##   reference does the same automatically.
 
 {.push raises: [], gcsafe.}
 
@@ -48,6 +49,21 @@ type
     running: bool
 
   DecodeWorker* = ref DecodeWorkerObj
+
+proc shutdownWorker(s: ptr WorkerState, t: Thread[ptr WorkerState]) =
+  ## Shared by stop() and the destructor: quit message, join, free.
+  {.cast(raises: []).}:
+    s.jobs.send(Msg(quit: true))
+    joinThread(t)
+  s.jobs.close()
+  s.results.close()
+  deallocShared(s)
+
+proc `=destroy`(w: DecodeWorkerObj) =
+  if w.running and w.state != nil:
+    shutdownWorker(w.state, w.thread)
+  # The other fields (a Thread with a nimcall body and a ptr argument, a bool)
+  # own no managed memory.
 
 proc workerLoop(s: ptr WorkerState) {.thread, raises: [].} =
   while true:
@@ -108,14 +124,10 @@ proc tryTakeResult*(w: DecodeWorker): Opt[DecodeOutcome] =
 
 proc stop*(w: DecodeWorker) =
   ## Finishes the job in flight, joins the thread and frees the channels.
-  ## Idempotent.
+  ## Idempotent; also done automatically when the worker is destroyed.
   if not w.running:
     return
   w.running = false
-  {.cast(raises: []).}:
-    w.state.jobs.send(Msg(quit: true))
-    joinThread(w.thread)
-  w.state.jobs.close()
-  w.state.results.close()
-  deallocShared(w.state)
+  shutdownWorker(w.state, w.thread)
   w.state = nil
+

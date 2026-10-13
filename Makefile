@@ -71,8 +71,10 @@ $(ZXING_LIB):
 zxing: $(ZXING_LIB)
 
 TESTS := $(sort $(filter-out tests/testutils.nim,$(wildcard tests/t*.nim)))
+# Suites that need Qt (they import qrscan/qml / nimqml).
+QT_TESTS := tests/tqml.nim tests/tshutdown.nim
 # Qt-free suites (core + worker), for hosts without Qt.
-CORE_TESTS := $(filter-out tests/tqml.nim,$(TESTS))
+CORE_TESTS := $(filter-out $(QT_TESTS),$(TESTS))
 
 # The library must not depend on nim-qtcamera (frames come from any source).
 independence:

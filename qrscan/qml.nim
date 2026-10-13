@@ -38,7 +38,8 @@ type
     source: int
     scanning: bool
     inFlight: bool
-    wantsFrame: bool ## a requested frame was dropped while another scanner decoded
+    wantsFrame: bool ## waiting for its turn to request a frame
+    waitSeq: int     ## queue position (lower = waiting longer); kept across drops
     dropped: int
     opts: DecodeOptions
 
@@ -57,6 +58,7 @@ QtObject:
     frames: FrameSource
     hasFrames: bool
     shutDown: bool
+    nextWaitSeq: int
 
   proc setup(self: QrScanBackend)
   proc delete(self: QrScanBackend)
@@ -166,7 +168,8 @@ QtObject:
       return
     if self.worker.busy:
       # Another scanner's decode holds the shared worker. The request this
-      # frame answered is used up, so ask again once the worker is free.
+      # frame answered is used up: wait for another turn, keeping the place in
+      # line (waitSeq is unchanged).
       inc e.dropped
       e.wantsFrame = true
       return
@@ -178,7 +181,28 @@ QtObject:
       e.inFlight = true
     else:
       inc e.dropped
-      e.wantsFrame = true
+      e.wantsFrame = true # keeps its place in line
+
+  proc enqueue(self: QrScanBackend, e: ScannerEntry) =
+    ## Joins the back of the line of scanners waiting for a frame.
+    inc self.nextWaitSeq
+    e.waitSeq = self.nextWaitSeq
+    e.wantsFrame = true
+
+  proc serveWaiting(self: QrScanBackend) =
+    ## While the shared worker is free, asks the scanner that has waited
+    ## longest for a frame. A source may deliver synchronously from
+    ## requestNext, making the worker busy again: the others keep their place.
+    while not self.worker.busy:
+      var next: ScannerEntry = nil
+      for e in self.scanners.values:
+        if e.wantsFrame and not e.inFlight and e.scanning and e.source != 0 and
+            (next == nil or e.waitSeq < next.waitSeq):
+          next = e
+      if next == nil:
+        break
+      next.wantsFrame = false
+      self.requestNext(next)
 
   proc drain(self: QrScanBackend) =
     while true:
@@ -192,13 +216,9 @@ QtObject:
       e.inFlight = false
       for code in outcome.codes:
         self.scanResult(outcome.id, code.text, outcome.decodeMs)
-      self.requestNext(e)
-    # The worker is free again: re-request for scanners whose frame was dropped.
-    if not self.worker.busy:
-      for e in self.scanners.values:
-        if e.wantsFrame and not e.inFlight:
-          e.wantsFrame = false
-          self.requestNext(e)
+      # Back of the line, so scanners waiting since earlier go first.
+      self.enqueue(e)
+    self.serveWaiting()
 
 var backend {.threadvar.}: QrScanBackend
 
