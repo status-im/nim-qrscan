@@ -1,0 +1,9 @@
+.deps/
+build/
+nimcache/
+tests/t*
+!tests/t*.nim
+tests/c/tcapi
+tests/bench/bdecode
+examples/*/main
+.superpowers/
