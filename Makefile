@@ -73,4 +73,19 @@ independence:
 test: independence | qt-pkgconfig $(ZXING_LIB)
 	@for t in $(TESTS); do echo "== $$t"; $(NIM) c -r $(NIMFLAGS) -d:qrscanTesting $$t || exit 1; done
 
-.PHONY: all deps example-deps zxing independence test
+# C ABI: static library + header (include/qrscan.h). C hosts link
+# build/libqrscan.a + libZXing.a + the C++ runtime.
+CAPI_LIB := build/libqrscan.a
+
+capi: $(ZXING_LIB)
+	$(NIM) c --app:staticlib --noMain -d:release --hints:off \
+	  --nimcache:build/nimcache-capi --out:$(CURDIR)/$(CAPI_LIB) qrscan/capi.nim
+
+QRGEN_C := .deps/QR-Code-generator/c
+
+ctest: capi
+	$(CC) -std=c11 -O1 -Iinclude -I$(QRGEN_C) tests/c/tcapi.c $(QRGEN_C)/qrcodegen.c \
+	  $(CAPI_LIB) $(ZXING_LIB) $(CXXRUNTIME) -lpthread -lm -o tests/c/tcapi
+	tests/c/tcapi
+
+.PHONY: all deps example-deps zxing independence test capi ctest
