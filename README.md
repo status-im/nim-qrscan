@@ -13,6 +13,36 @@ Work in progress — see `docs/spike-results.md`.
 | `qrscan` | `decode(LumaView, DecodeOptions)` | zxing-cpp |
 | `qrscan/worker` | `DecodeWorker`: one background thread, one job in flight | core |
 | `qrscan/capi` | C interface (`include/qrscan.h`) | core |
+| `qrscan/qml` | QML `NimQrScan.QrScanner` over an abstract frame source | core, nimqml/seaqt |
+
+## QML
+
+The scanner takes frames from a **frame source** the host provides when it
+installs the library. A source is any integer handle the host chooses; the
+library never imports a camera library.
+
+```nim
+import nimqml, qrscan/qml
+
+let frames = FrameSource(
+  attach:      proc(source, scanner: int) = …,  # start sending frames: deliverFrame(scanner, data, w, h, stride)
+  requestNext: proc(source: int) = …,          # send one more frame
+  detach:      proc(source: int) = …)          # stop
+install(engine, frames)                         # C++ hosts: installOnEngine(qqmlEnginePtr, frames)
+```
+
+```qml
+import NimQrScan 1.0
+QrScanner { frameSource: someSourceHandle; onTagFound: tag => console.log(tag) }
+```
+
+With nim-qtcamera, the glue is a few lines over its FrameTap
+(`setTapConsumer` → `deliverFrame`, `armTap` → `requestNext`); see
+`examples/scan`.
+
+Threading and pull model: decoding runs on one background thread. The scanner
+requests the next frame only after the previous result arrives, so at most one
+decode is in flight; results are posted back to the GUI thread.
 
 ## C interface
 
