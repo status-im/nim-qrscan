@@ -20,8 +20,9 @@ QMAKE ?= qmake
 NIMFLAGS ?= --hints:off $(EXTRA_NIMFLAGS)
 
 ZXING_SRC   := vendor/zxing-cpp
-ZXING_BUILD := build/zxing
+ZXING_BUILD ?= build/zxing
 ZXING_LIB   := $(ZXING_BUILD)/core/libZXing.a
+NIMFLAGS    += -d:qrscanZxingLib=$(CURDIR)/$(ZXING_LIB)
 
 define clone_pinned
 	@test -d $(DEPS)/$(1) || git clone --quiet $(2) $(DEPS)/$(1)
@@ -43,8 +44,14 @@ example-deps: deps
 	$(call clone_pinned,nim-qtcamera,$(QTCAMERA_URL),$(QTCAMERA_REV))
 
 # Exports PKG_CONFIG_PATH (and, in generated mode, the pkg-config wrapper on
-# PATH) so seaqt's compile-time gorge("pkg-config ...") finds Qt.
--include $(DEPS)/prl-to-pc/qt-pkgconfig.mk
+# PATH) so seaqt's compile-time gorge("pkg-config ...") finds Qt. Without
+# qmake (e.g. a Qt-less Linux container) only the Qt-free targets work.
+ifneq ($(shell command -v $(QMAKE) 2>/dev/null),)
+ -include $(DEPS)/prl-to-pc/qt-pkgconfig.mk
+else
+ qt-pkgconfig:
+	@:
+endif
 
 ifeq ($(shell uname -s),Darwin)
  QT_LIBDIR := $(shell $(QMAKE) -query QT_INSTALL_LIBS 2>/dev/null)
@@ -64,6 +71,8 @@ $(ZXING_LIB):
 zxing: $(ZXING_LIB)
 
 TESTS := $(sort $(filter-out tests/testutils.nim,$(wildcard tests/t*.nim)))
+# Qt-free suites (core + worker), for hosts without Qt.
+CORE_TESTS := $(filter-out tests/tqml.nim,$(TESTS))
 
 # The library must not depend on nim-qtcamera (frames come from any source).
 independence:
@@ -75,18 +84,20 @@ test: independence | qt-pkgconfig $(ZXING_LIB)
 
 # C ABI: static library + header (include/qrscan.h). C hosts link
 # build/libqrscan.a + libZXing.a + the C++ runtime.
-CAPI_LIB := build/libqrscan.a
+CAPI_LIB ?= build/libqrscan.a
+TCAPI_BIN ?= tests/c/tcapi
 
 capi: $(ZXING_LIB)
 	$(NIM) c --app:staticlib --noMain -d:release --hints:off \
-	  --nimcache:build/nimcache-capi --out:$(CURDIR)/$(CAPI_LIB) qrscan/capi.nim
+	  -d:qrscanZxingLib=$(CURDIR)/$(ZXING_LIB) \
+	  --nimcache:$(dir $(CAPI_LIB))nimcache-capi --out:$(CURDIR)/$(CAPI_LIB) qrscan/capi.nim
 
 QRGEN_C := .deps/QR-Code-generator/c
 
 ctest: capi
 	$(CC) -std=c11 -O1 -Iinclude -I$(QRGEN_C) tests/c/tcapi.c $(QRGEN_C)/qrcodegen.c \
-	  $(CAPI_LIB) $(ZXING_LIB) $(CXXRUNTIME) -lpthread -lm -o tests/c/tcapi
-	tests/c/tcapi
+	  $(CAPI_LIB) $(ZXING_LIB) $(CXXRUNTIME) -lpthread -lm -o $(TCAPI_BIN)
+	$(TCAPI_BIN)
 
 bench: $(ZXING_LIB)
 	$(NIM) c -r -d:release $(NIMFLAGS) tests/bench/bdecode.nim
@@ -102,4 +113,16 @@ example: | qt-pkgconfig $(ZXING_LIB)
 	@test -d $(DEPS)/nim-qtcamera || (echo "run: make example-deps [QTCAMERA_URL=<repo>]" && false)
 	$(NIM) c -r $(NIMFLAGS) $(EXAMPLE_FLAGS) examples/scan/main.nim
 
+test-core: independence $(ZXING_LIB)
+	@for t in $(CORE_TESTS); do echo "== $$t"; $(NIM) c -r $(NIMFLAGS) -d:qrscanTesting $$t || exit 1; done
+
+# Per-platform build + C test (runs where this host can): see docs/platforms.md
+cross-check:
+	scripts/cross-check.sh macos
+	scripts/cross-check.sh ios-sim
+	scripts/cross-check.sh ios
+	scripts/cross-check.sh android arm64-v8a
+	scripts/cross-check.sh android x86_64
+
+.PHONY: test-core cross-check
 .PHONY: all deps example-deps zxing independence test capi ctest bench example

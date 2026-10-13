@@ -21,12 +21,16 @@ when not fileExists(qrscanZxingLib):
     " (run `make zxing` or pass -d:qrscanZxingLib=<path>)".}
 
 {.passL: "\"" & qrscanZxingLib & "\"".}
-when defined(macosx) or defined(ios) or defined(android):
-  {.passL: "-lc++".}
+# Runtime libraries go after the archive (GNU ld resolves in order; zxing
+# needs libm, e.g. lround).
+when defined(macosx) or defined(ios):
+  {.passL: "-lc++".} # libm is part of libSystem
+elif defined(android):
+  {.passL: "-lc++ -lm".}
 elif defined(windows):
   discard # the MSVC C++ runtime comes with the clang/MSVC toolchain
 else:
-  {.passL: "-lstdc++".}
+  {.passL: "-lstdc++ -lm".}
 
 type
   ZXingImageView* = object
