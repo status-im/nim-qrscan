@@ -11,7 +11,7 @@
 ## component (qml/NimQrScan) driven by one Nim backend installed as the context
 ## property `nimQrScanBackend`.
 
-import std/[os, tables, strutils]
+import std/[algorithm, os, tables, strutils]
 import results
 import nimqml
 import ./[types, worker]
@@ -37,9 +37,11 @@ type
   ScannerEntry = ref object
     source: int
     scanning: bool
-    inFlight: bool
-    wantsFrame: bool ## waiting for its turn to request a frame
-    waitSeq: int     ## queue position (lower = waiting longer); kept across drops
+    inFlight: bool          ## its frame is being decoded
+    waiting: bool           ## wants a decode turn
+    waitSeq: int            ## place in line (lower = waiting longer)
+    requested: bool         ## a requestNext is outstanding
+    pending: Opt[DecodeJob] ## at most one held frame (the newest)
     dropped: int
     opts: DecodeOptions
 
@@ -59,6 +61,8 @@ QtObject:
     hasFrames: bool
     shutDown: bool
     nextWaitSeq: int
+    pumping: bool
+    pumpAgain: bool
 
   proc setup(self: QrScanBackend)
   proc delete(self: QrScanBackend)
@@ -103,9 +107,68 @@ QtObject:
   proc entry(self: QrScanBackend, handle: int): ScannerEntry =
     self.scanners.getOrDefault(handle, nil)
 
-  proc requestNext(self: QrScanBackend, e: ScannerEntry) =
-    if not self.shutDown and self.hasFrames and e.scanning and not e.inFlight and e.source != 0:
-      self.frames.requestNext(e.source)
+  # Scheduling. All scanners share one decode worker, which decodes one frame
+  # at a time. Fairness is applied when a frame is *admitted* to the worker:
+  # every scanner holds at most one frame (its newest), and whenever the worker
+  # is free it takes the held frame of the scanner that has waited longest. A
+  # scanner that just got a result joins the back of the line. Frame requests
+  # go out in line order, but a source answering instantly can't jump ahead of
+  # an older scanner whose frame arrives later: that frame is held and wins
+  # the next turn.
+
+  proc enqueue(self: QrScanBackend, e: ScannerEntry) =
+    ## Joins the back of the line.
+    inc self.nextWaitSeq
+    e.waitSeq = self.nextWaitSeq
+    e.waiting = true
+
+  proc admit(self: QrScanBackend) =
+    ## Starts decoding the held frame of the longest-waiting scanner.
+    if self.worker.busy:
+      return
+    var next: ScannerEntry = nil
+    for e in self.scanners.values:
+      if e.pending.isSome and e.waiting and e.scanning and not e.inFlight and
+          (next == nil or e.waitSeq < next.waitSeq):
+        next = e
+    if next == nil:
+      return
+    var job = next.pending.get
+    if self.worker.submit(job):
+      next.pending = Opt.none(DecodeJob)
+      next.waiting = false
+      next.inFlight = true
+
+  proc requestFrames(self: QrScanBackend) =
+    ## Asks waiting scanners without a held frame for one, in line order.
+    if self.shutDown or not self.hasFrames:
+      return
+    var line: seq[ScannerEntry]
+    for e in self.scanners.values:
+      if e.waiting and e.scanning and not e.inFlight and not e.requested and
+          e.pending.isNone and e.source != 0:
+        line.add e
+    line.sort(proc(a, b: ScannerEntry): int = cmp(a.waitSeq, b.waitSeq))
+    for e in line:
+      e.requested = true
+      self.frames.requestNext(e.source) # may deliver synchronously (re-enters pump)
+
+  proc pump(self: QrScanBackend) =
+    ## admit + requestFrames; re-entrant calls (synchronous sources) are folded
+    ## into the outer loop.
+    if self.shutDown:
+      return
+    if self.pumping:
+      self.pumpAgain = true
+      return
+    self.pumping = true
+    while true:
+      self.pumpAgain = false
+      self.admit()
+      self.requestFrames()
+      if not self.pumpAgain:
+        break
+    self.pumping = false
 
   proc createScanner(self: QrScanBackend): int {.slot.} =
     let h = self.nextHandle
@@ -129,16 +192,29 @@ QtObject:
     if self.hasFrames and e.source != 0:
       self.frames.detach(e.source)
     e.source = source
+    e.requested = false
+    e.pending = Opt.none(DecodeJob)
     if self.hasFrames and source != 0:
       self.frames.attach(source, handle)
-      self.requestNext(e)
+      if not e.inFlight:
+        self.enqueue(e)
+      self.pump()
 
   proc setScanning(self: QrScanBackend, handle: int, on: bool) {.slot.} =
     let e = self.entry(handle)
     if e == nil or e.scanning == on:
       return
     e.scanning = on
-    self.requestNext(e)
+    if on:
+      if not e.inFlight:
+        self.enqueue(e)
+      self.pump()
+    else:
+      # Frames answering an outstanding request are ignored while paused, so
+      # forget it: resuming asks again.
+      e.waiting = false
+      e.requested = false
+      e.pending = Opt.none(DecodeJob)
 
   proc setOptions(self: QrScanBackend, handle: int, tryHarder: bool, tryRotate: bool,
                   tryInvert: bool, formatsCsv: string) {.slot.} =
@@ -161,48 +237,24 @@ QtObject:
   proc deliver(self: QrScanBackend, handle: int, data: openArray[byte],
                width, height, rowStride: int) =
     let e = self.entry(handle)
-    if self.shutDown or e == nil or not e.scanning:
+    if self.shutDown or e == nil:
+      return
+    e.requested = false # any delivery answers the outstanding request
+    if not e.scanning:
       return
     if e.inFlight:
-      inc e.dropped # its own result will request the next frame
+      inc e.dropped # its own result comes first; it asks again afterwards
       return
-    if self.worker.busy:
-      # Another scanner's decode holds the shared worker. The request this
-      # frame answered is used up: wait for another turn, keeping the place in
-      # line (waitSeq is unchanged).
-      inc e.dropped
-      e.wantsFrame = true
-      return
+    if not e.waiting:
+      self.enqueue(e) # a frame without a request: join the line
+    if e.pending.isSome:
+      inc e.dropped # replaced by the newer frame
     var job = DecodeJob(id: handle, width: width, height: height, rowStride: rowStride,
                         opts: e.opts, data: newSeq[byte](data.len))
     if data.len > 0:
       copyMem(addr job.data[0], unsafeAddr data[0], data.len)
-    if self.worker.submit(job):
-      e.inFlight = true
-    else:
-      inc e.dropped
-      e.wantsFrame = true # keeps its place in line
-
-  proc enqueue(self: QrScanBackend, e: ScannerEntry) =
-    ## Joins the back of the line of scanners waiting for a frame.
-    inc self.nextWaitSeq
-    e.waitSeq = self.nextWaitSeq
-    e.wantsFrame = true
-
-  proc serveWaiting(self: QrScanBackend) =
-    ## While the shared worker is free, asks the scanner that has waited
-    ## longest for a frame. A source may deliver synchronously from
-    ## requestNext, making the worker busy again: the others keep their place.
-    while not self.worker.busy:
-      var next: ScannerEntry = nil
-      for e in self.scanners.values:
-        if e.wantsFrame and not e.inFlight and e.scanning and e.source != 0 and
-            (next == nil or e.waitSeq < next.waitSeq):
-          next = e
-      if next == nil:
-        break
-      next.wantsFrame = false
-      self.requestNext(next)
+    e.pending = Opt.some(job)
+    self.pump()
 
   proc drain(self: QrScanBackend) =
     while true:
@@ -216,9 +268,9 @@ QtObject:
       e.inFlight = false
       for code in outcome.codes:
         self.scanResult(outcome.id, code.text, outcome.decodeMs)
-      # Back of the line, so scanners waiting since earlier go first.
-      self.enqueue(e)
-    self.serveWaiting()
+      if self.entry(outcome.id) != nil and e.scanning:
+        self.enqueue(e) # back of the line
+    self.pump()
 
 var backend {.threadvar.}: QrScanBackend
 

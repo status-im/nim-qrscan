@@ -1,6 +1,6 @@
 ## QML QrScanner over a synthetic frame source: no camera, no nim-qtcamera.
 
-import std/[unittest, os, tables, monotimes, times]
+import std/[unittest, os, tables, monotimes, times, sequtils]
 import nimqml
 import ../qrscan/qml
 import ./[qrgen, testutils]
@@ -42,6 +42,9 @@ QtObject:
 var
   syncSource = 0                # a source that answers requestNext synchronously
   syncFrame: GrayImage
+  asyncSource = 0               # a source that answers after requestNext returns
+  asyncFrame: GrayImage
+  deferred: seq[int]            # async sources with a request to answer
   attached: Table[int, int]     # source -> scanner
   requests: Table[int, int]     # source -> pending frame requests
   queue: Table[int, seq[GrayImage]]
@@ -54,7 +57,9 @@ let testFrames = FrameSource(
       requests.mgetOrPut(source, 0).inc
       if source == syncSource and source in attached: # frame already available
         deliverFrame(attached[source], syncFrame.data, syncFrame.width,
-                     syncFrame.height, syncFrame.rowStride),
+                     syncFrame.height, syncFrame.rowStride)
+      elif source == asyncSource: # answered later, from the test loop
+        deferred.add(source),
   detach: proc(source: int) {.gcsafe, raises: [].} =
     {.cast(gcsafe).}: attached.del(source))
 
@@ -77,10 +82,19 @@ proc slowFrameWithCode(text: string): GrayImage =
     for x in 0 ..< qr.width:
       result.data[(1200 + y) * 2600 + 1200 + x] = qr.data[y * qr.rowStride + x]
 
+proc answerDeferred() =
+  let pending = deferred
+  deferred.setLen(0)
+  for src in pending:
+    if src in attached:
+      deliverFrame(attached[src], asyncFrame.data, asyncFrame.width,
+                   asyncFrame.height, asyncFrame.rowStride)
+
 proc waitFor(cond: proc(): bool, timeoutMs = 3000): bool =
   let deadline = getMonoTime() + initDuration(milliseconds = timeoutMs)
   while getMonoTime() < deadline:
     processEvents()
+    answerDeferred()
     if cond():
       return true
     sleep(2)
@@ -110,6 +124,7 @@ Item {
   QrScanner {
     // a second scanner sharing the backend's one decode worker
     frameSource: 8
+    onTagFound: tag => reporter.foundTag(tag)
     Component.onCompleted: reporter.readyOther(handle)
   }
   Connections { target: reporter; function onSetScanning(on) { loader.item.scanning = on } }
@@ -162,21 +177,17 @@ suite "qml QrScanner":
     pump(source)
     check waitFor(proc(): bool = reporter.found.len == before + 1)
 
-  test "a frame dropped while another scanner decodes is requested again": # final review I1
+  test "a frame arriving while another scanner decodes is decoded next": # final review I1
     let a = reporter.otherHandle  # source 8
     let b = reporter.scannerHandle # source 7
     check a > 0
+    reporter.found.setLen(0)
     let slow = slowFrameWithCode("from-a")
     deliverFrame(a, slow.data, slow.width, slow.height, slow.rowStride) # worker busy with A
-    requests[source] = 0
     let g = qrImage("from-b")
-    deliverFrame(b, g.data, g.width, g.height, g.rowStride) # dropped: worker busy
-    check waitFor(proc(): bool = "from-a" in reporter.found or requests.getOrDefault(source) > 0, 20_000)
-    # once A's decode is done, B must be asked for a new frame (no stall)
-    check waitFor(proc(): bool = requests.getOrDefault(source) == 1, 20_000)
-    queue[source] = @[g]
-    pump(source)
-    check waitFor(proc(): bool = "from-b" in reporter.found, 20_000)
+    deliverFrame(b, g.data, g.width, g.height, g.rowStride) # held until the worker is free
+    check waitFor(proc(): bool = "from-a" in reporter.found and "from-b" in reporter.found, 20_000)
+    check reporter.found.find("from-a") < reporter.found.find("from-b")
 
   test "a synchronously fed scanner doesn't starve a waiting one": # review: fairness
     let a = reporter.otherHandle  # source 8: answers every request at once
@@ -189,6 +200,26 @@ suite "qml QrScanner":
     deliverFrame(b, g.data, g.width, g.height, g.rowStride) # dropped: worker busy with A
     check waitFor(proc(): bool = requests.getOrDefault(source) >= 1, 3000)
     syncSource = 0
+    for i in 0 ..< 50:
+      processEvents()
+      sleep(2)
+
+  test "sync and async sources both get decoded": # follow-up review: admission fairness
+    reporter.found.setLen(0)
+    syncFrame = qrImage("sync-a", scale = 20)
+    asyncFrame = qrImage("async-b", scale = 20)
+    syncSource = 8  # scanner A: frame available immediately
+    asyncSource = 7 # scanner B: frame arrives after requestNext returns
+    requests[source] = 0
+    deliverFrame(reporter.otherHandle, syncFrame.data, syncFrame.width, syncFrame.height,
+                 syncFrame.rowStride) # A starts; from here both sources keep feeding
+    deliverFrame(reporter.scannerHandle, asyncFrame.data, asyncFrame.width,
+                 asyncFrame.height, asyncFrame.rowStride)
+    check waitFor(proc(): bool = reporter.found.count("async-b") >= 3 and
+                                 reporter.found.count("sync-a") >= 3, 5000)
+    syncSource = 0
+    asyncSource = 0
+    deferred.setLen(0)
     for i in 0 ..< 50:
       processEvents()
       sleep(2)
