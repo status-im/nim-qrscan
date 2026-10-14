@@ -2,7 +2,7 @@
 # (empty RUN = this machine can't run the binary) for <platform> [abi].
 PLATFORM=$1
 ABI=${2:-}
-NDK=${ANDROID_NDK_ROOT:-$HOME/Library/Android/sdk/ndk/27.2.12479018}
+source "$(dirname "${BASH_SOURCE[0]}")/android-env.sh"
 NIM_TARGET_FLAGS=()
 LINK_FLAGS=()
 RUN=""
@@ -36,13 +36,14 @@ case "$PLATFORM" in
       x86_64)    TRIPLE=x86_64-linux-android28;  CPU=amd64 ;;
       *) echo "unsupported Android ABI: $ABI" >&2; exit 2 ;;
     esac
-    BIN=$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin
+    require_ndk
+    BIN=$NDK/toolchains/llvm/prebuilt/$NDK_HOST/bin
     CC=$BIN/$TRIPLE-clang; CXX=$BIN/$TRIPLE-clang++
     ln -sf "$BIN/llvm-ar" "$WRAP/ar"; export PATH="$WRAP:$PATH" # ELF archives
     NIM_TARGET_FLAGS=(--os:android --cpu:$CPU -d:androidNDK --cc:clang
                       --clang.exe="$CC" --clang.linkerexe="$CC")
     LINK_FLAGS=(-static-libstdc++)
-    ADB=$HOME/Library/Android/sdk/platform-tools/adb
+    ADB=$ANDROID_SDK/platform-tools/adb
     if "$ADB" devices 2>/dev/null | grep -qE "device$" &&
        [[ "$("$ADB" shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')" == "$ABI" ]]; then
       RUN="scripts/adb-run.sh"

@@ -12,7 +12,7 @@ BUILD=build/zxing-$TAG
 COMMON=(-DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF
         -DZXING_READERS=ON -DZXING_WRITERS=OFF -DZXING_C_API=ON
         -DZXING_EXAMPLES=OFF -DZXING_BLACKBOX_TESTS=OFF -DZXING_UNIT_TESTS=OFF -Wno-dev)
-NDK=${ANDROID_NDK_ROOT:-$HOME/Library/Android/sdk/ndk/27.2.12479018}
+source "$(dirname "$0")/android-env.sh"
 
 case "$PLATFORM" in
   macos|linux) TARGET=() ;;
@@ -20,7 +20,8 @@ case "$PLATFORM" in
                    -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0) ;;
   ios-sim) TARGET=(-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator
                    -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0) ;;
-  android) TARGET=(-DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"
+  android) require_ndk
+           TARGET=(-DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"
                    -DANDROID_ABI="${ABI:?android needs an ABI (arm64-v8a, x86_64, ...)}"
                    -DANDROID_PLATFORM=android-28 -DANDROID_STL=c++_static) ;;
   windows) # clang targeting MSVC, as desktop-app's Makefile builds the app

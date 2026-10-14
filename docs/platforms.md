@@ -2,16 +2,19 @@
 
 Required platforms: **iOS, Android, Linux, Windows, macOS**. Checked on
 2026-10-13 from a macOS arm64 host with Nim 2.2.10, zxing-cpp v3.1.1, Qt
-6.11.0, Xcode (iOS 26.1 SDK) and Android NDK 27.2.
+6.11.0, Xcode (iOS 26.1 SDK) and Android NDK 27.2. Anyone can repeat it:
+`scripts/cross-check.sh <platform>` finds the Android SDK/NDK through
+`ANDROID_HOME` / `ANDROID_NDK_ROOT` (or Android Studio's default location),
+and runs the test wherever a simulator/emulator is available.
 
 ## nim-qrscan (core, worker, C ABI)
 
 | Platform | How | Result |
 |---|---|---|
 | macOS arm64 | native: `make test && make ctest`; `scripts/cross-check.sh macos` | all suites + `tcapi: OK` |
-| iOS simulator arm64 | `scripts/cross-check.sh ios-sim`, run with `xcrun simctl spawn booted` (iPhone 17 Pro) | `tcapi: OK` (ran in the simulator) |
+| iOS simulator arm64 | `scripts/cross-check.sh ios-sim`, run with `xcrun simctl spawn booted` (boot any iPhone simulator first) | `tcapi: OK` (ran in the simulator) |
 | iOS device arm64 | `scripts/cross-check.sh ios` | builds and links (Mach-O arm64, platform iOS, minos 17.0); not run (no device attached) |
-| Android arm64-v8a | `scripts/cross-check.sh android arm64-v8a`, run on the `Medium_Phone_API_36.1` emulator via `adb` | `tcapi: OK` (ran on the emulator) |
+| Android arm64-v8a | `scripts/cross-check.sh android arm64-v8a`, run on a running arm64 emulator via `adb` | `tcapi: OK` (ran on the emulator) |
 | Android x86_64 | `scripts/cross-check.sh android x86_64` | builds and links (ELF x86-64); not run (the emulator image is arm64) |
 | Linux arm64 | Docker `nimlang/nim:2.2.10`: `make test-core && make ctest` | 20/20 core+worker tests, `tcapi: OK` |
 | Linux x86_64 | same, `--platform linux/amd64` (emulated) | 20/20, `tcapi: OK` |
