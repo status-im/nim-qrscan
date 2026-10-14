@@ -18,7 +18,13 @@ QtObject {
     readonly property real lastDecodeMs: d.lastDecodeMs
 
     // Every successful decode (lastTag only changes when the text differs).
+    // Not emitted while `scanning` is false, including for a decode that was
+    // already running when scanning stopped.
     signal tagFound(string tag)
+
+    // The frame could not be decoded (e.g. invalid size/stride from the frame
+    // source). Scanning continues with the next frame.
+    signal decodeError(string message)
 
     function applyOptions() {
         nimQrScanBackend.setOptions(d.handle, tryHarder, tryRotate, tryInvert, formats.join(","))
@@ -56,6 +62,11 @@ QtObject {
 
     readonly property Connections _backendConnection: Connections {
         target: nimQrScanBackend
+
+        function onScanError(h, message) {
+            if (h === d.handle)
+                root.decodeError(message)
+        }
 
         function onScanResult(h, text, decodeMs) {
             if (h !== d.handle)

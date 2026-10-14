@@ -33,7 +33,11 @@ install(engine, frames)                         # C++ hosts: installOnEngine(qqm
 
 ```qml
 import NimQrScan 1.0
-QrScanner { frameSource: someSourceHandle; onTagFound: tag => console.log(tag) }
+QrScanner {
+    frameSource: someSourceHandle
+    onTagFound: tag => console.log(tag)          // not emitted while scanning is false
+    onDecodeError: message => console.warn(message) // e.g. a source sent a bad stride
+}
 ```
 
 With nim-qtcamera, the glue is a few lines over its FrameTap

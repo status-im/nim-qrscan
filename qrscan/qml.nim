@@ -103,6 +103,7 @@ QtObject:
     self.worker.isRunning
 
   proc scanResult*(self: QrScanBackend, handle: int, text: string, decodeMs: float) {.signal.}
+  proc scanError*(self: QrScanBackend, handle: int, message: string) {.signal.}
 
   proc entry(self: QrScanBackend, handle: int): ScannerEntry =
     self.scanners.getOrDefault(handle, nil)
@@ -266,8 +267,13 @@ QtObject:
       if e == nil:
         continue # scanner destroyed while decoding
       e.inFlight = false
-      for code in outcome.codes:
-        self.scanResult(outcome.id, code.text, outcome.decodeMs)
+      # A scanner paused while its frame was decoding (e.g. the dialog closed)
+      # gets no late results.
+      if e.scanning:
+        if outcome.error.isSome:
+          self.scanError(outcome.id, outcome.error.get.msg)
+        for code in outcome.codes:
+          self.scanResult(outcome.id, code.text, outcome.decodeMs)
       if self.entry(outcome.id) != nil and e.scanning:
         self.enqueue(e) # back of the line
     self.pump()

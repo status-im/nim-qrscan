@@ -10,6 +10,7 @@ putEnv("QT_QPA_PLATFORM", "offscreen")
 QtObject:
   type Reporter = ref object of QObject
     found: seq[string]
+    decodeErrors: seq[string]
     scannerHandle: int
     otherHandle: int
 
@@ -34,6 +35,9 @@ QtObject:
 
   proc foundTag(self: Reporter, tag: string) {.slot.} =
     self.found.add tag
+
+  proc decodeError(self: Reporter, message: string) {.slot.} =
+    self.decodeErrors.add message
 
   proc setScanning*(self: Reporter, on: bool) {.signal.}
   proc destroyScanner*(self: Reporter) {.signal.}
@@ -117,6 +121,7 @@ Item {
       QrScanner {
         frameSource: 7
         onTagFound: tag => reporter.foundTag(tag)
+        onDecodeError: message => reporter.decodeError(message)
         Component.onCompleted: reporter.ready(handle)
       }
     }
@@ -223,6 +228,31 @@ suite "qml QrScanner":
     for i in 0 ..< 50:
       processEvents()
       sleep(2)
+
+  test "no tagFound after scanning turns false mid-decode": # Phase 4 Review Focus 1
+    let b = reporter.scannerHandle
+    let slow = slowFrameWithCode("paused-mid-decode")
+    deliverFrame(b, slow.data, slow.width, slow.height, slow.rowStride)
+    reporter.setScanning(false) # e.g. the scanner dialog closes
+    processEvents()
+    for i in 0 ..< 1500: # let the slow decode finish (up to ~7.5 s)
+      processEvents()
+      sleep(5)
+    check "paused-mid-decode" notin reporter.found
+    reporter.setScanning(true)
+    processEvents()
+
+  test "decode errors are reported to QML":
+    let b = reporter.scannerHandle
+    reporter.decodeErrors.setLen(0)
+    requests[source] = 0
+    var bad = newSeq[byte](100)
+    deliverFrame(b, bad, 10, 10, 5) # rowStride < width: invalid input
+    check waitFor(proc(): bool = reporter.decodeErrors.len == 1, 5000)
+    check reporter.decodeErrors.len == 1
+    if reporter.decodeErrors.len == 1:
+      check reporter.decodeErrors[0].len > 0
+    check waitFor(proc(): bool = requests.getOrDefault(source) >= 1, 5000) # keeps scanning
 
   test "scanner destroyed mid-decode": # Review Focus 2
     let h = reporter.scannerHandle
