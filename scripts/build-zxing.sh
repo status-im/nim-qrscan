@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Static libZXing (readers + C API) for one platform → build/zxing-<platform>[-<abi>]/
-#   scripts/build-zxing.sh macos | linux | ios | ios-sim | android <abi> | windows
+#   scripts/build-zxing.sh macos [arm64|x86_64] | linux | ios | ios-sim | android <abi> | windows
+# macos without an arch builds for the host; with one, for that arch (e.g. an
+# x86_64 Qt kit on Apple Silicon), into its own build dir.
 # Mobile settings mirror desktop-app/mobile/scripts/commonCmakeConfig.sh.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -15,7 +17,8 @@ COMMON=(-DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_
 source scripts/android-env.sh # cwd is the repo root (cd above)
 
 case "$PLATFORM" in
-  macos|linux) TARGET=() ;;
+  macos)   TARGET=(${ABI:+-DCMAKE_OSX_ARCHITECTURES=$ABI}) ;;
+  linux)   TARGET=() ;;
   ios)     TARGET=(-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos
                    -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0) ;;
   ios-sim) TARGET=(-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator
