@@ -273,6 +273,10 @@ QtObject:
         if outcome.error.isSome:
           self.scanError(outcome.id, outcome.error.get.msg)
         for code in outcome.codes:
+          # A handler of the previous signal may have stopped (or destroyed)
+          # the scanner, e.g. after accepting the first code of the frame.
+          if self.entry(outcome.id) != e or not e.scanning:
+            break
           self.scanResult(outcome.id, code.text, outcome.decodeMs)
       if self.entry(outcome.id) != nil and e.scanning:
         self.enqueue(e) # back of the line

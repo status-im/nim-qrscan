@@ -13,6 +13,7 @@ QtObject:
     decodeErrors: seq[string]
     scannerHandle: int
     otherHandle: int
+    stopOnFirstTag: bool # like a host that stops scanning once a code is accepted
 
   proc setup(self: Reporter)
   proc delete(self: Reporter)
@@ -27,6 +28,9 @@ QtObject:
   proc delete(self: Reporter) =
     self.QObject.delete
 
+  proc setScanning*(self: Reporter, on: bool) {.signal.}
+  proc destroyScanner*(self: Reporter) {.signal.}
+
   proc ready(self: Reporter, handle: int) {.slot.} =
     self.scannerHandle = handle
 
@@ -35,12 +39,12 @@ QtObject:
 
   proc foundTag(self: Reporter, tag: string) {.slot.} =
     self.found.add tag
+    if self.stopOnFirstTag:
+      self.setScanning(false)
 
   proc decodeError(self: Reporter, message: string) {.slot.} =
     self.decodeErrors.add message
 
-  proc setScanning*(self: Reporter, on: bool) {.signal.}
-  proc destroyScanner*(self: Reporter) {.signal.}
 
 # --- synthetic frame source (the host's job in real apps) -----------------
 var
@@ -239,6 +243,30 @@ suite "qml QrScanner":
       processEvents()
       sleep(5)
     check "paused-mid-decode" notin reporter.found
+    reporter.setScanning(true)
+    processEvents()
+
+  test "no second tagFound once the host stops scanning on the first": # Phase 4 final review I2
+    let b = reporter.scannerHandle
+    let a = qrImage("first-of-two")
+    let c = qrImage("second-of-two")
+    let w = a.width + c.width + 64
+    let h = max(a.height, c.height) + 32
+    var two = GrayImage(width: w, height: h, rowStride: w, data: newSeq[byte](w * h))
+    for i in 0 ..< two.data.len: two.data[i] = 255
+    for y in 0 ..< a.height:
+      for x in 0 ..< a.width: two.data[(16 + y) * w + 16 + x] = a.data[y * a.rowStride + x]
+    for y in 0 ..< c.height:
+      for x in 0 ..< c.width: two.data[(16 + y) * w + 48 + a.width + x] = c.data[y * c.rowStride + x]
+    let before = reporter.found.len
+    reporter.stopOnFirstTag = true
+    deliverFrame(b, two.data, two.width, two.height, two.rowStride)
+    discard waitFor(proc(): bool = reporter.found.len > before, 5000)
+    for i in 0 ..< 50: # let any further signals of that result arrive
+      processEvents()
+      sleep(2)
+    reporter.stopOnFirstTag = false
+    check reporter.found.len - before == 1
     reporter.setScanning(true)
     processEvents()
 
