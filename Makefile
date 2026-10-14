@@ -9,7 +9,7 @@ PRLTOPC_REV  := 03a8a91707db7d9257d8617453fefb58fe848904
 QRGEN_REV    := d1c87af693b0c93fd0b6ff34f098d3011944eb82
 # Example only: the camera demo in examples/scan. Library code and tests never
 # use nim-qtcamera.
-QTCAMERA_REV := d7bd4c0875a49628d20abd70e8111032dddbb64c
+QTCAMERA_REV := cade89be59db66ba33e463f0ef753d6f1f04a98c
 QTCAMERA_URL ?= https://github.com/status-im/nim-qtcamera.git
 
 DEPS  := .deps
