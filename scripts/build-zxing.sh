@@ -12,7 +12,7 @@ BUILD=build/zxing-$TAG
 COMMON=(-DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF
         -DZXING_READERS=ON -DZXING_WRITERS=OFF -DZXING_C_API=ON
         -DZXING_EXAMPLES=OFF -DZXING_BLACKBOX_TESTS=OFF -DZXING_UNIT_TESTS=OFF -Wno-dev)
-source "$(dirname "$0")/android-env.sh"
+source scripts/android-env.sh # cwd is the repo root (cd above)
 
 case "$PLATFORM" in
   macos|linux) TARGET=() ;;
