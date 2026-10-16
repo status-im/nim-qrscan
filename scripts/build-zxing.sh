@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Static libZXing (readers + C API) for one platform → build/zxing-<platform>[-<abi>]/
-#   scripts/build-zxing.sh macos [arm64|x86_64] | linux | ios | ios-sim | android <abi> | windows
+#   scripts/build-zxing.sh macos [arm64|x86_64] | linux | ios | ios-sim [arm64|x86_64] | android <abi> | windows
 # macos without an arch builds for the host; with one, for that arch (e.g. an
 # x86_64 Qt kit on Apple Silicon), into its own build dir.
 # Mobile settings mirror desktop-app/mobile/scripts/commonCmakeConfig.sh.
@@ -22,7 +22,7 @@ case "$PLATFORM" in
   ios)     TARGET=(-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos
                    -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0) ;;
   ios-sim) TARGET=(-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator
-                   -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0) ;;
+                   -DCMAKE_OSX_ARCHITECTURES=${ABI:-arm64} -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0) ;;
   android) require_ndk
            TARGET=(-DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"
                    -DANDROID_ABI="${ABI:?android needs an ABI (arm64-v8a, x86_64, ...)}"
