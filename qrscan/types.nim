@@ -32,6 +32,11 @@ type
     tryHarder*, tryRotate*, tryInvert*, tryDownscale*: bool
     roi*: Opt[NormRect]          ## none/empty = whole image
     maxResults*: int             ## 0 = zxing's default
+    returnErrors*: bool          ## also count codes found but undecodable (DecodeReport.undecodable)
+
+  DecodeReport* = object
+    codes*: seq[DecodedCode]
+    undecodable*: int ## codes found but not decodable (with DecodeOptions.returnErrors)
 
   Point2* = tuple[x, y: float32] ## normalized to the full (pre-ROI) image
 
