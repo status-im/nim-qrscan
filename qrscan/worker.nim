@@ -34,6 +34,7 @@ type
   DecodeOutcome* = object
     id*: int
     codes*: seq[DecodedCode]
+    undecodable*: int ## codes found but undecodable (with opts.returnErrors)
     error*: Opt[DecodeError]
     decodeMs*: float
 
@@ -78,12 +79,13 @@ proc workerLoop(s: ptr WorkerState) {.thread, raises: [].} =
     if msg.quit:
       break
     let t0 = getMonoTime()
-    let r = decode(lumaView(msg.job.data, msg.job.width, msg.job.height,
-                            msg.job.rowStride), msg.job.opts)
+    let r = decodeReport(lumaView(msg.job.data, msg.job.width, msg.job.height,
+                                  msg.job.rowStride), msg.job.opts)
     var outcome = DecodeOutcome(id: msg.job.id,
                                 decodeMs: (getMonoTime() - t0).inMicroseconds.float / 1000.0)
     if r.isOk:
-      outcome.codes = r.get
+      outcome.codes = r.get.codes
+      outcome.undecodable = r.get.undecodable
     else:
       outcome.error = Opt.some(r.error)
     {.cast(raises: []).}:

@@ -1,2 +1,3 @@
 module NimQrScan
 QrScanner 1.0 QrScanner.qml
+QrImageDecoder 1.0 QrImageDecoder.qml

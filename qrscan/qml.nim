@@ -11,11 +11,11 @@
 ## component (qml/NimQrScan) driven by one Nim backend installed as the context
 ## property `nimQrScanBackend`.
 
-import std/[algorithm, os, tables, strutils]
+import std/[algorithm, json, os, tables, strutils]
 import results
 import nimqml
 import ./[types, worker]
-import ./private/qml_shim
+import ./private/[qml_shim, image_loader]
 
 export results, types
 
@@ -45,11 +45,32 @@ type
     dropped: int
     opts: DecodeOptions
 
+  ImageDecoderEntry = ref object
+    seq: int ## the latest decodeImageFile; older results are dropped
+
+  ImageJob = tuple[decoder, seq: int]
+
+const imageMaxDim* = 3000
+  ## Longest side an image is scaled down to before decoding (large photos).
+
+proc imageOptions(): DecodeOptions =
+  ## Still images: everything a camera frame gets, tried harder.
+  result = DecodeOptions.init()
+  result.tryHarder = true
+  result.tryRotate = true
+  result.tryInvert = true
+  result.tryDownscale = true
+  result.returnErrors = true
+
 proc drainOnGui() {.cdecl, gcsafe, raises: [].}
 proc quitOnGui() {.cdecl, gcsafe, raises: [].}
 
 proc onWorkerReady() {.gcsafe, raises: [], nimcall.} =
   ## Worker thread: wake the GUI thread to collect the result.
+  shimPostToGui(drainOnGui)
+
+proc onLoaderReady() {.gcsafe, raises: [], nimcall.} =
+  ## Loader thread: wake the GUI thread to collect the loaded image.
   shimPostToGui(drainOnGui)
 
 QtObject:
@@ -59,6 +80,11 @@ QtObject:
     worker: DecodeWorker
     frames: FrameSource
     hasFrames: bool
+    imageDecoders: Table[int, ImageDecoderEntry]
+    loader: ImageLoader                  ## loads picked images off the GUI thread
+    imageJobs: Table[int, ImageJob]      ## load / decode job id (< 0) -> requester
+    nextImageJob: int
+    imageQueue: seq[DecodeJob]           ## loaded images waiting for the worker
     shutDown: bool
     nextWaitSeq: int
     pumping: bool
@@ -73,6 +99,7 @@ QtObject:
     result.setup
     result.nextHandle = 1
     result.worker = newDecodeWorker(onWorkerReady)
+    result.loader = newImageLoader(onLoaderReady)
     # Stop and join the worker before the application object goes away.
     shimOnAboutToQuit(quitOnGui)
 
@@ -94,6 +121,9 @@ QtObject:
         if e.source != 0:
           self.frames.detach(e.source)
     self.scanners.clear()
+    self.imageDecoders.clear()
+    self.imageQueue.setLen(0)
+    self.loader.stop()
     self.worker.stop()
 
   proc isShutDown*(self: QrScanBackend): bool =
@@ -103,6 +133,10 @@ QtObject:
     self.worker.isRunning
 
   proc scanResult*(self: QrScanBackend, handle: int, text: string, decodeMs: float) {.signal.}
+  proc imageDecoded*(self: QrScanBackend, handle: int, textsJson: string, undecodable: int) {.signal.}
+    ## textsJson: JSON array of the decoded texts ("[]" = no code found)
+  proc imageDecodeFailed*(self: QrScanBackend, handle: int, kind: string, message: string) {.signal.}
+    ## kind: "unsupported" | "unopenable" (see image_load)
   proc scanError*(self: QrScanBackend, handle: int, message: string) {.signal.}
 
   proc entry(self: QrScanBackend, handle: int): ScannerEntry =
@@ -124,8 +158,14 @@ QtObject:
     e.waiting = true
 
   proc admit(self: QrScanBackend) =
-    ## Starts decoding the held frame of the longest-waiting scanner.
+    ## Starts decoding a picked image (a one-off user action goes first), else
+    ## the held frame of the longest-waiting scanner.
     if self.worker.busy:
+      return
+    if self.imageQueue.len > 0:
+      var job = self.imageQueue[0]
+      if self.worker.submit(job):
+        self.imageQueue.delete(0)
       return
     var next: ScannerEntry = nil
     for e in self.scanners.values:
@@ -170,6 +210,83 @@ QtObject:
       if not self.pumpAgain:
         break
     self.pumping = false
+
+  proc createImageDecoder(self: QrScanBackend): int {.slot.} =
+    let h = self.nextHandle
+    inc self.nextHandle
+    self.imageDecoders[h] = ImageDecoderEntry()
+    h
+
+  proc dropQueuedImageJobs(self: QrScanBackend, handle: int) =
+    var kept: seq[DecodeJob]
+    for job in self.imageQueue:
+      if self.imageJobs.getOrDefault(job.id, (0, 0)).decoder == handle:
+        self.imageJobs.del(job.id)
+      else:
+        kept.add job
+    self.imageQueue = kept
+
+  proc destroyImageDecoder(self: QrScanBackend, handle: int) {.slot.} =
+    self.imageDecoders.del(handle)
+    self.dropQueuedImageJobs(handle)
+
+  proc cancelImageDecode(self: QrScanBackend, handle: int) {.slot.} =
+    ## Drops the decoder's pending request: its load or decode finishes, but
+    ## no imageDecoded / imageDecodeFailed is emitted for it.
+    let e = self.imageDecoders.getOrDefault(handle, nil)
+    if e == nil:
+      return
+    inc e.seq
+    self.dropQueuedImageJobs(handle)
+
+  proc heicSupported(self: QrScanBackend): bool {.slot.} =
+    image_load.heicSupported()
+
+  proc decodeImageFile(self: QrScanBackend, handle: int, fileUrlOrPath: string) {.slot.} =
+    ## Queues a local image for loading (off the GUI thread) and decoding. The
+    ## result (or a load failure) arrives as imageDecoded / imageDecodeFailed,
+    ## always after this returns; a newer call on the same decoder supersedes
+    ## this one.
+    let e = self.imageDecoders.getOrDefault(handle, nil)
+    if self.shutDown or e == nil:
+      return
+    inc e.seq
+    self.dropQueuedImageJobs(handle)
+    dec self.nextImageJob
+    let id = self.nextImageJob # negative: never a scanner handle
+    self.imageJobs[id] = (handle, e.seq)
+    discard self.loader.submit(id, fileUrlOrPath, imageMaxDim)
+
+  proc imageLoaded(self: QrScanBackend, outcome: LoadOutcome) =
+    ## A load finished: queue the image for decoding, or report the failure.
+    let job = self.imageJobs.getOrDefault(outcome.id, (0, 0))
+    let e = self.imageDecoders.getOrDefault(job.decoder, nil)
+    if e == nil or e.seq != job.seq:
+      self.imageJobs.del(outcome.id) # destroyed, or superseded
+      return
+    if outcome.error.isSome:
+      self.imageJobs.del(outcome.id)
+      self.imageDecodeFailed(job.decoder, $outcome.error.get.kind, outcome.error.get.message)
+      return
+    let img = outcome.image
+    self.imageQueue.add DecodeJob(id: outcome.id, data: img.data, width: img.width,
+                                  height: img.height, rowStride: img.width,
+                                  opts: imageOptions())
+
+  proc imageOutcome(self: QrScanBackend, outcome: DecodeOutcome) =
+    var job: ImageJob
+    if not self.imageJobs.pop(outcome.id, job):
+      return
+    let e = self.imageDecoders.getOrDefault(job.decoder, nil)
+    if e == nil or e.seq != job.seq:
+      return # destroyed, or superseded by a newer image
+    if outcome.error.isSome:
+      self.imageDecodeFailed(job.decoder, $ilUnopenable, outcome.error.get.msg)
+      return
+    var texts = newJArray()
+    for c in outcome.codes:
+      texts.add %c.text
+    self.imageDecoded(job.decoder, $texts, outcome.undecodable)
 
   proc createScanner(self: QrScanBackend): int {.slot.} =
     let h = self.nextHandle
@@ -258,11 +375,20 @@ QtObject:
     self.pump()
 
   proc drain(self: QrScanBackend) =
+    # Finished image loads: decode them, or report the failure.
+    while true:
+      let l = self.loader.tryTakeResult()
+      if l.isNone:
+        break
+      self.imageLoaded(l.get)
     while true:
       let r = self.worker.tryTakeResult()
       if r.isNone:
         break
       let outcome = r.get
+      if outcome.id < 0:
+        self.imageOutcome(outcome)
+        continue
       let e = self.entry(outcome.id)
       if e == nil:
         continue # scanner destroyed while decoding

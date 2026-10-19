@@ -48,6 +48,45 @@ Threading and pull model: decoding runs on one background thread. The scanner
 requests the next frame only after the previous result arrives, so at most one
 decode is in flight; results are posted back to the GUI thread.
 
+## Decoding an image
+
+`QrImageDecoder` decodes the QR codes in a local image file, e.g. one the user
+picked:
+
+```qml
+import NimQrScan 1.0
+
+QrImageDecoder {
+    id: decoder
+    onDecoded: (texts, undecodable) => { /* texts: [] = no code found;
+                                           undecodable > 0: found but damaged */ }
+    onFailed: (kind, message) => { /* "unsupported" | "unopenable" */ }
+}
+// decoder.decodeFile(fileUrl)   // a file: URL or a local path
+```
+
+- Only local files are read; other URLs fail as `"unopenable"` without being
+  fetched. Nothing is uploaded.
+- The format comes from the content. `"unsupported"`: no decoder recognises it
+  here (e.g. a text file, or HEIC where the platform can't decode it).
+  `"unopenable"`: missing, empty, unreadable (permissions, I/O), or a
+  recognised format that fails to read (damaged, truncated).
+- Images are loaded off the GUI thread, oriented from EXIF, composited onto
+  white (transparency reads as paper) and scaled to at most 3000 px on the
+  longest side, then decoded on the same worker as camera frames, with
+  tryHarder/tryRotate/tryInvert/tryDownscale.
+- A newer `decodeFile` supersedes an older one; `cancel()` drops the pending
+  one (e.g. when the scanner is closed); a destroyed decoder reports nothing.
+  `busy` is true until the result or `cancel()`.
+
+HEIC/HEIF (`heicSupported`):
+
+| Platform | HEIC/HEIF |
+|---|---|
+| macOS, iOS | yes, Qt's `qmacheif` plugin (iOS: a static plugin the app must link) |
+| Android | yes, the platform's `BitmapFactory` (API 28+) when Qt has no plugin |
+| Windows, Linux | no (Qt ships no HEIF plugin) |
+
 ## C interface
 
 ```c

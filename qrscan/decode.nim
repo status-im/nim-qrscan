@@ -44,9 +44,10 @@ func validate(img: LumaView): Result[void, DecodeError] =
     return err(invalid("buffer is shorter than rowStride * height"))
   ok()
 
-proc decode*(img: LumaView, opts = DecodeOptions.init()): Result[seq[DecodedCode], DecodeError] =
-  ## Decodes every barcode of `opts.formats` in `img`. No code found is
-  ## `ok(@[])`, not an error.
+proc decodeReport*(img: LumaView, opts = DecodeOptions.init()): Result[DecodeReport, DecodeError] =
+  ## Decodes every barcode of `opts.formats` in `img`. No code found is an
+  ## empty report, not an error. With `opts.returnErrors`, codes found but not
+  ## decodable (damaged, cut off) are counted in `undecodable`.
   ? validate(img)
 
   let iv = ZXing_ImageView_new_checked(cast[ptr uint8](img.data), img.len.cint,
@@ -79,6 +80,8 @@ proc decode*(img: LumaView, opts = DecodeOptions.init()): Result[seq[DecodedCode
   ZXing_ReaderOptions_setFormats(o, addr formats[0], formats.len.cint)
   if opts.maxResults > 0:
     ZXing_ReaderOptions_setMaxNumberOfSymbols(o, min(opts.maxResults, 255).cint)
+  if opts.returnErrors:
+    ZXing_ReaderOptions_setReturnErrors(o, true)
 
   let barcodes = ZXing_ReadBarcodes(iv, o)
   ZXing_ReaderOptions_delete(o)
@@ -87,9 +90,28 @@ proc decode*(img: LumaView, opts = DecodeOptions.init()): Result[seq[DecodedCode
     return err(engineError("decoding failed"))
 
   var codes: seq[DecodedCode]
+  var undecodable = 0
+  # zxing may report one undecodable symbol from several detection passes:
+  # count a result only when its centre isn't inside one already counted.
+  var undecodableBoxes: seq[tuple[x0, y0, x1, y1: int]]
   for i in 0 ..< ZXing_Barcodes_size(barcodes).int:
     let b = ZXing_Barcodes_at(barcodes, i.cint)
-    if b == nil or not ZXing_Barcode_isValid(b):
+    if b == nil:
+      continue
+    if not ZXing_Barcode_isValid(b):
+      if opts.returnErrors and ZXing_Barcode_errorType(b) != 0:
+        let p = ZXing_Barcode_position(b)
+        let xs = [p.topLeft.x.int, p.topRight.x.int, p.bottomRight.x.int, p.bottomLeft.x.int]
+        let ys = [p.topLeft.y.int, p.topRight.y.int, p.bottomRight.y.int, p.bottomLeft.y.int]
+        let (cx, cy) = ((min(xs) + max(xs)) div 2, (min(ys) + max(ys)) div 2)
+        var seen = false
+        for bx in undecodableBoxes:
+          if cx in bx.x0 .. bx.x1 and cy in bx.y0 .. bx.y1:
+            seen = true
+            break
+        if not seen:
+          undecodableBoxes.add (min(xs), min(ys), max(xs), max(ys))
+          inc undecodable
       continue
     let format = toFormat(ZXing_Barcode_format(b))
     if format.isNone:
@@ -114,4 +136,9 @@ proc decode*(img: LumaView, opts = DecodeOptions.init()): Result[seq[DecodedCode
       inc k
     codes.add code
   ZXing_Barcodes_delete(barcodes)
-  ok(codes)
+  ok(DecodeReport(codes: codes, undecodable: undecodable))
+
+proc decode*(img: LumaView, opts = DecodeOptions.init()): Result[seq[DecodedCode], DecodeError] =
+  ## Decodes every barcode of `opts.formats` in `img`. No code found is
+  ## `ok(@[])`, not an error.
+  decodeReport(img, opts).map(proc(r: DecodeReport): seq[DecodedCode] = r.codes)

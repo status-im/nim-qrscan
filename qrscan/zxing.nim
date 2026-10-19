@@ -60,12 +60,14 @@ proc ZXing_ReaderOptions_setTryInvert*(o: ptr ZXingReaderOptions, v: bool)
 proc ZXing_ReaderOptions_setTryDownscale*(o: ptr ZXingReaderOptions, v: bool)
 proc ZXing_ReaderOptions_setFormats*(o: ptr ZXingReaderOptions, formats: ptr int32, count: cint)
 proc ZXing_ReaderOptions_setMaxNumberOfSymbols*(o: ptr ZXingReaderOptions, n: cint)
+proc ZXing_ReaderOptions_setReturnErrors*(o: ptr ZXingReaderOptions, v: bool)
 
 proc ZXing_ReadBarcodes*(iv: ptr ZXingImageView, o: ptr ZXingReaderOptions): ptr ZXingBarcodes
 proc ZXing_Barcodes_size*(b: ptr ZXingBarcodes): cint
 proc ZXing_Barcodes_at*(b: ptr ZXingBarcodes, i: cint): ptr ZXingBarcode
 proc ZXing_Barcodes_delete*(b: ptr ZXingBarcodes)
 
+proc ZXing_Barcode_errorType*(b: ptr ZXingBarcode): int32 ## 0 = ZXing_ErrorType_None
 proc ZXing_Barcode_isValid*(b: ptr ZXingBarcode): bool
 proc ZXing_Barcode_format*(b: ptr ZXingBarcode): int32
 proc ZXing_Barcode_text*(b: ptr ZXingBarcode): cstring ## free with ZXing_free

@@ -94,3 +94,79 @@ suite "decode":
     let w = LumaView(data: cast[ptr UncheckedArray[byte]](addr buf[0]), len: buf.len,
                      width: high(int), height: high(int), rowStride: high(int))
     check decode(w).error.kind == dekInvalidInput
+
+# A real QR whose data region is damaged beyond error correction: the finder
+# patterns survive, so ZXing detects the symbol but can't decode it.
+proc damagedQr(): GrayImage =
+  const scale = 4
+  const quiet = 4
+  result = qrImage("a QR code whose data region is too damaged to decode", scale, quiet, eccLow)
+  let modules = result.width div scale - 2 * quiet
+  for my in modules div 2 ..< modules - 9:
+    for mx in modules div 2 ..< modules - 1:
+      for dy in 0 ..< scale:
+        for dx in 0 ..< scale:
+          let i = ((my + quiet) * scale + dy) * result.rowStride + (mx + quiet) * scale + dx
+          result.data[i] = 255'u8 - result.data[i]
+
+suite "decodeReport":
+  test "returnErrors counts a detected but undecodable code":
+    let g = damagedQr()
+    var opts = DecodeOptions.init()
+    opts.returnErrors = true
+    let r = decodeReport(g.view, opts)
+    check r.isOk
+    check r.get.codes.len == 0
+    check r.get.undecodable == 1
+
+  test "without returnErrors the damaged code is just absent":
+    let g = damagedQr()
+    let r = decodeReport(g.view, DecodeOptions.init())
+    check r.get.codes.len == 0
+    check r.get.undecodable == 0
+    check decode(g.view).get.len == 0 # decode() unchanged
+
+  test "a valid code is reported as before":
+    let g = qrImage("report-ok")
+    var opts = DecodeOptions.init()
+    opts.returnErrors = true
+    let r = decodeReport(g.view, opts)
+    check r.get.codes.len == 1 and r.get.codes[0].text == "report-ok"
+    check r.get.undecodable == 0
+
+  test "a textured image without a code reports no undecodable code":
+    # still-image options (as QrImageDecoder): a photo with no QR must give
+    # "no code found", not "found but undecodable"
+    var opts = DecodeOptions.init()
+    opts.tryHarder = true
+    opts.tryRotate = true
+    opts.tryInvert = true
+    opts.tryDownscale = true
+    opts.returnErrors = true
+    for seed in [1'u32, 7, 42]:
+      let g = GrayImage(width: 1600, height: 1200, rowStride: 1600,
+                        data: newSeq[byte](1600 * 1200)).withNoise(127, seed)
+      let r = decodeReport(g.view, opts)
+      check r.get.codes.len == 0
+      check r.get.undecodable == 0
+
+  test "a QR-like block texture without finder patterns reports no undecodable code":
+    var opts = DecodeOptions.init()
+    opts.tryHarder = true
+    opts.tryRotate = true
+    opts.tryInvert = true
+    opts.tryDownscale = true
+    opts.returnErrors = true
+    var s = 12345'u32
+    for cell in [4, 6, 9]:
+      var g = GrayImage(width: 1200, height: 900, rowStride: 1200, data: newSeq[byte](1200 * 900))
+      for cy in 0 ..< 900 div cell:
+        for cx in 0 ..< 1200 div cell:
+          s = s xor (s shl 13); s = s xor (s shr 17); s = s xor (s shl 5)
+          let v = if (s and 1) == 1: 0'u8 else: 255'u8
+          for y in 0 ..< cell:
+            for x in 0 ..< cell:
+              g.data[(cy * cell + y) * 1200 + cx * cell + x] = v
+      let r = decodeReport(g.view, opts)
+      check r.get.codes.len == 0
+      check r.get.undecodable == 0
