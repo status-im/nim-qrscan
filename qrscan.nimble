@@ -4,8 +4,10 @@ description = "QR/barcode decoding for Nim (zxing-cpp), with a C ABI and a QML s
 license     = "MIT"
 
 requires "nim >= 2.0.0", "results"
-# zxing-cpp is a git submodule (vendor/zxing-cpp); seaqt / nimqml-seaqt (QML
-# layer only) are consumed by path, pinned in the Makefile.
+# zxing-cpp is a git submodule (vendor/zxing-cpp), built during the Nim compile
+# (qrscan/zxing.nim); seaqt / nimqml-seaqt (QML layer only) are consumed by
+# path, pinned in the Makefile.
+installDirs = @["vendor", "qml"]
 
 task test, "Run tests":
   exec "make test"

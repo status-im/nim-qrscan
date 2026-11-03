@@ -5,22 +5,62 @@
 ## ZXing_BarcodeFormatFromString, so these bindings don't depend on how
 ## zxing's ZX_BCF_ID macro encodes them.
 ##
-## Link: `-d:qrscanZxingLib=<path to libZXing.a>` overrides the default
-## (this repo's `make zxing` output), so hosts can build zxing themselves.
+## Link: zxing-cpp (vendor/zxing-cpp) is built with CMake during the Nim
+## compile, for the os/cpu Nim targets, into nimcache (cached; keyed by target
+## and flags). Cross builds pass what CMake needs beyond that (toolchain file,
+## sysroot, deployment target) as `-d:qrscanCmakeFlags=...`.
+## `-d:qrscanZxingLib=<path to libZXing.a>` links a prebuilt library instead.
 
 {.push raises: [], gcsafe.}
 
-import std/os
+import std/[compilesettings, hashes, os, strutils]
 
 const
-  repoDir = currentSourcePath().parentDir().parentDir()
-  qrscanZxingLib {.strdefine.} = repoDir / "build/zxing/core/libZXing.a"
+  qrscanZxingLib {.strdefine.} = ""
+  qrscanCmakeFlags {.strdefine.} = ""
 
-when not fileExists(qrscanZxingLib):
-  {.error: "libZXing.a not found at " & qrscanZxingLib &
-    " (run `make zxing` or pass -d:qrscanZxingLib=<path>)".}
+  zxingSrc = currentSourcePath().parentDir().parentDir() / "vendor/zxing-cpp"
+  zxingTarget =
+    when defined(ios):
+      "-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=" &
+        (if hostCPU == "amd64": "x86_64" else: hostCPU)
+    elif defined(macosx):
+      "-DCMAKE_OSX_ARCHITECTURES=" & (if hostCPU == "amd64": "x86_64" else: hostCPU)
+    elif defined(android):
+      "-DANDROID_ABI=" & (case hostCPU
+        of "arm64": "arm64-v8a"
+        of "amd64": "x86_64"
+        of "arm": "armeabi-v7a"
+        else: "x86")
+    else: ""
+  zxingCmakeFlags =
+    "-DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON " &
+    "-DBUILD_SHARED_LIBS=OFF -DZXING_READERS=ON -DZXING_WRITERS=OFF " &
+    "-DZXING_C_API=ON -DZXING_EXAMPLES=OFF -DZXING_BLACKBOX_TESTS=OFF " &
+    "-DZXING_UNIT_TESTS=OFF -Wno-dev " & zxingTarget & " " & qrscanCmakeFlags
 
-{.passL: "\"" & qrscanZxingLib & "\"".}
+proc findZxing(dir: string): string {.compileTime.} =
+  for lib in ["core/libZXing.a", "core/ZXing.lib", "core/Release/ZXing.lib"]:
+    if fileExists(dir / lib):
+      return dir / lib
+
+proc buildZxing(): string {.compileTime.} =
+  let dir = querySetting(nimcacheDir) / "zxing-" & hostOS & "-" & hostCPU & "-" &
+    toHex(hash(zxingCmakeFlags)).toLowerAscii()
+  result = findZxing(dir)
+  if result.len == 0:
+    for cmd in ["cmake -S " & quoteShell(zxingSrc) & " -B " & quoteShell(dir) & " " & zxingCmakeFlags,
+                "cmake --build " & quoteShell(dir) & " --config Release -j"]:
+      let (output, code) = gorgeEx(cmd)
+      doAssert code == 0, "zxing-cpp build failed: " & cmd & "\n" & output
+    result = findZxing(dir)
+
+const zxingLib = (when qrscanZxingLib.len > 0: qrscanZxingLib else: buildZxing())
+
+when not fileExists(zxingLib):
+  {.error: "libZXing.a not found at " & zxingLib.}
+
+{.passL: "\"" & zxingLib & "\"".}
 # Runtime libraries go after the archive (GNU ld resolves in order; zxing
 # needs libm, e.g. lround).
 when defined(macosx) or defined(ios):
