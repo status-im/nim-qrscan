@@ -126,8 +126,11 @@ in ~1.4 ms (`docs/spike-results.md`).
 ## zxing-cpp
 
 Pinned at v3.1.1 (`vendor/zxing-cpp`), built static with readers and the C API
-only (`make zxing`). Hosts that build zxing themselves pass
-`-d:qrscanZxingLib=<path to libZXing.a>`.
+only. Importing qrscan builds it with CMake during the Nim compile, for the
+os/cpu Nim targets, into nimcache. Cross builds pass the extra CMake flags the
+target needs with `-d:qrscanCmakeFlags=...` (e.g. the NDK toolchain file, or
+`-DCMAKE_OSX_SYSROOT=iphonesimulator`). Hosts that build zxing themselves pass
+`-d:qrscanZxingLib=<path to libZXing.a>` (as `make test` does, from `make zxing`).
 
 Not included yet: decoding image files (PNG/JPEG).
 
