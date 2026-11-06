@@ -140,7 +140,7 @@ Not included yet: decoding image files (PNG/JPEG).
 
 | Job | What |
 |---|---|
-| test (linux), test (macos) | `make test` (core, worker, QML headless) + `make ctest` |
+| test (linux), test (macos) | `make test` (core, worker, QML headless) + `make ctest`, and `scripts/install-check.sh`: a nimble install and a consumer that builds zxing-cpp from it |
 | test (macos) | also the C test **in the iOS simulator**, and an iOS device build |
 | build (android) | arm64-v8a and x86_64 build and link |
 | test (windows) | core + worker suites built like desktop-app builds Nim on Windows (clang → x86_64-pc-windows-msvc, lld, /MD) |
