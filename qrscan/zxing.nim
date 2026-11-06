@@ -6,9 +6,11 @@
 ## zxing's ZX_BCF_ID macro encodes them.
 ##
 ## Link: zxing-cpp (vendor/zxing-cpp) is built with CMake during the Nim
-## compile, for the os/cpu Nim targets, into nimcache (cached; keyed by target
-## and flags). Cross builds pass what CMake needs beyond that (toolchain file,
-## sysroot, deployment target) as `-d:qrscanCmakeFlags=...`.
+## compile into nimcache (cached; keyed by target, flags and the zxing-cpp
+## version). The CMake target follows the Nim target on iOS, macOS and
+## Android; Linux and Windows cross builds pass a toolchain in
+## `-d:qrscanCmakeFlags=...`, as other cross builds pass what CMake needs
+## beyond the target (sysroot, deployment target).
 ## `-d:qrscanZxingLib=<path to libZXing.a>` links a prebuilt library instead.
 
 {.push raises: [], gcsafe.}
