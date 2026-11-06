@@ -64,6 +64,16 @@ jobs:
       - name: C interface test
         run: make ctest
 
+      - name: Install nimble
+        uses: nim-lang/setup-nimble-action@v2
+        with:
+          nimble-version: "0.26.2"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The other steps link a prebuilt zxing-cpp (-d:qrscanZxingLib).
+      - name: Package install, and a consumer that builds zxing-cpp from it
+        run: scripts/install-check.sh
+
       # Catches worker-thread memory freed by another thread after the worker
       # exited, which only crashes outright on Windows. macOS frees a dead
       # thread's TLS through malloc, so ASan sees it reliably there.
