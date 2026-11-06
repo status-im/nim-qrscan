@@ -10,9 +10,11 @@ requires "nim >= 2.0.0", "results"
 installDirs = @["vendor", "qml"]
 
 before install:
-  # zxing-cpp's Rust wrapper links its core as a directory symlink, which
-  # nimble's install copy can't handle on Linux; qrscan never builds it.
-  rmFile("vendor/zxing-cpp/wrappers/rust/core")
+  # zxing-cpp's Python and Rust wrappers link its sources as directory
+  # symlinks, which nimble's install copy can't handle on Linux; qrscan
+  # builds neither wrapper.
+  rmDir("vendor/zxing-cpp/wrappers/python")
+  rmDir("vendor/zxing-cpp/wrappers/rust")
 
 task test, "Run tests":
   exec "make test"
