@@ -45,8 +45,10 @@ proc findZxing(dir: string): string {.compileTime.} =
       return dir / lib
 
 proc buildZxing(): string {.compileTime.} =
+  # core/CMakeLists.txt declares the zxing-cpp version.
+  let key = hash(zxingCmakeFlags & staticRead(zxingSrc / "core/CMakeLists.txt"))
   let dir = querySetting(nimcacheDir) / "zxing-" & hostOS & "-" & hostCPU & "-" &
-    toHex(hash(zxingCmakeFlags)).toLowerAscii()
+    toHex(key).toLowerAscii()
   result = findZxing(dir)
   if result.len == 0:
     for cmd in ["cmake -S " & quoteShell(zxingSrc) & " -B " & quoteShell(dir) & " " & zxingCmakeFlags,
